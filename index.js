@@ -1,1568 +1,360 @@
 const {
   Client,
   GatewayIntentBits,
-  PermissionsBitField
+  PermissionsBitField,
+  ChannelType
 } = require("discord.js");
-
 const http = require("http");
 const fs = require("fs");
-
-// ═══════════════════════════════════════
-// ⚙️ CONFIGURACIÓN
-// ═══════════════════════════════════════
+const path = require("path");
 
 const PREFIX = "p.";
 const TOKEN = process.env.DISCORD_TOKEN;
-const PORT = process.env.PORT || 3000;
-const ECONOMY_FILE = "./economy.json";
+const PORT = Number(process.env.PORT) || 3000;
+const ECONOMY_FILE = path.join(__dirname, "economy.json");
 
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildPresences,
     GatewayIntentBits.MessageContent
   ]
 });
 
-// ═══════════════════════════════════════
-// 💾 ECONOMÍA
-// ═══════════════════════════════════════
-
 let economy = {};
-
-if (fs.existsSync(ECONOMY_FILE)) {
-  try {
-    economy = JSON.parse(
-      fs.readFileSync(ECONOMY_FILE, "utf8")
-    );
-  } catch {
-    economy = {};
+try {
+  if (fs.existsSync(ECONOMY_FILE)) {
+    const data = JSON.parse(fs.readFileSync(ECONOMY_FILE, "utf8"));
+    economy = data && typeof data === "object" ? data : {};
   }
+} catch (err) {
+  console.error("No se pudo leer economy.json:", err.message);
+  economy = {};
 }
 
-function saveEconomy() {
-  fs.writeFileSync(
-    ECONOMY_FILE,
-    JSON.stringify(economy, null, 2)
-  );
+function newUser() {
+  return {
+    cash: 0, bank: 0, daily: 0, work: 0, crime: 0,
+    hut: 0, rob: 0, risk: 0, inventory: {},
+    stats: { work: 0, crime: 0, rob: 0, gifts: 0 }
+  };
 }
 
 function getUser(id) {
-  if (!economy[id]) {
-    economy[id] = {
-      cash: 0,
-      bank: 0,
-      daily: 0,
-      work: 0,
-      crime: 0,
-      hut: 0,
-      rob: 0,
-      risk: 0,
-      stats: {
-        work: 0,
-        crime: 0,
-        rob: 0,
-        gifts: 0
-      }
-    };
+  const current = economy[id] && typeof economy[id] === "object"
+    ? economy[id]
+    : newUser();
+  const defaults = newUser();
+  economy[id] = {
+    ...defaults,
+    ...current,
+    inventory: {
+      ...defaults.inventory,
+      ...(current.inventory || {})
+    },
+    stats: {
+      ...defaults.stats,
+      ...(current.stats || {})
+    }
+  };
+  for (const key of ["cash", "bank", "daily", "work", "crime", "hut", "rob", "risk"]) {
+    if (!Number.isFinite(economy[id][key])) economy[id][key] = 0;
   }
-
   return economy[id];
 }
 
+function saveEconomy() {
+  try {
+    fs.writeFileSync(ECONOMY_FILE, JSON.stringify(economy, null, 2));
+  } catch (err) {
+    console.error("No se pudo guardar economy.json:", err.message);
+  }
+}
+
 function random(min, max) {
-  return Math.floor(
-    Math.random() * (max - min + 1)
-  ) + min;
+  min = Math.ceil(Number(min));
+  max = Math.floor(Number(max));
+  return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
 function money(amount) {
-  return `${amount.toLocaleString("es-ES")} 🪙`;
+  return `${Math.max(0, Number(amount) || 0).toLocaleString("es-ES")} 🪙`;
 }
 
-function getCooldown(last, seconds) {
-  const remaining =
-    seconds * 1000 - (Date.now() - last);
-
+function cooldown(last, seconds) {
+  const remaining = Number(seconds) * 1000 - (Date.now() - Number(last || 0));
   if (remaining <= 0) return null;
-
-  const totalSeconds =
-    Math.ceil(remaining / 1000);
-
-  if (totalSeconds >= 60) {
-    const minutes =
-      Math.ceil(totalSeconds / 60);
-
-    return `⏳ Espera **${minutes} minuto(s)**.`;
-  }
-
-  return `⏳ Espera **${totalSeconds} segundo(s)**.`;
+  const total = Math.ceil(remaining / 1000);
+  return total >= 60
+    ? `⏳ Espera **${Math.ceil(total / 60)} minuto(s)**.`
+    : `⏳ Espera **${total} segundo(s)**.`;
 }
-
-// ═══════════════════════════════════════
-// 🎨 DECORACIÓN
-// ═══════════════════════════════════════
 
 function success(text) {
-  return (
-    "╭━━━〔 ✅ ÉXITO 〕━━━╮\n" +
-    `┃ ${text}\n` +
-    "╰━━━━━━━━━━━━━━━━━━╯"
-  );
+  return `╭━━━〔 ✅ ÉXITO 〕━━━╮\n┃ ${text}\n╰━━━━━━━━━━━━━━━━━━╯`;
 }
-
 function error(text) {
-  return (
-    "╭━━━〔 ❌ ERROR 〕━━━╮\n" +
-    `┃ ${text}\n` +
-    "╰━━━━━━━━━━━━━━━━━━╯"
-  );
+  return `╭━━━〔 ❌ ERROR 〕━━━╮\n┃ ${text}\n╰━━━━━━━━━━━━━━━━━━╯`;
 }
-
 function box(title, text) {
-  return (
-    `╔══════════════════════════════╗\n` +
-    `║ ${title}\n` +
-    `╠══════════════════════════════╣\n` +
-    `${text}\n` +
-    `╚══════════════════════════════╝`
-  );
+  return `╔══════════════════════════════╗\n║ ${title}\n╠══════════════════════════════╣\n${text}\n╚══════════════════════════════╝`;
 }
-
 function isAdmin(message) {
-  return message.member?.permissions.has(
-    PermissionsBitField.Flags.Administrator
-  );
+  return Boolean(message.member?.permissions.has(PermissionsBitField.Flags.Administrator));
+}
+function mentionedMember(message) {
+  return message.mentions.members.first() || null;
+}
+function mentionedUser(message) {
+  return message.mentions.users.first() || null;
+}
+function canModerate(message, member) {
+  if (!member) return false;
+  if (member.id === message.guild.ownerId) return false;
+  return member.id !== message.member.id && member.manageable;
+}
+function parseAmount(value) {
+  const amount = Number(value);
+  return Number.isSafeInteger(amount) && amount > 0 ? amount : null;
 }
 
-// ═══════════════════════════════════════
-// 🤖 BOT LISTO
-// ═══════════════════════════════════════
-
+console.log("🤖 JOSHUA INICIANDO...");
 client.once("ready", () => {
-  console.log(
-    `🤖 Joshua conectado como ${client.user.tag}`
-  );
-
+  console.log(`🟢 Conectado como ${client.user.tag}`);
+  console.log(`🌐 Servidores: ${client.guilds.cache.size}`);
   client.user.setPresence({
-    activities: [
-      {
-        name: "p.help 📖",
-        type: 0
-      }
-    ],
+    activities: [{ name: "p.help 📖", type: 0 }],
     status: "online"
   });
 });
+client.on("shardReconnecting", id => console.log(`🔄 Reconectando shard ${id}...`));
+client.on("shardResume", (id, events) => console.log(`🟢 Shard ${id} restaurado (${events} eventos)`));
+client.on("shardDisconnect", (event, id) => console.warn(`🔌 Shard ${id} desconectado (${event.code})`));
+client.on("shardError", (err, id) => console.error(`❌ Error del shard ${id}:`, err));
+client.on("warn", info => console.warn("⚠️ Discord.js:", info));
+client.on("error", err => console.error("❌ Discord.js:", err));
+process.on("unhandledRejection", err => console.error("❌ Promesa no controlada:", err));
+process.on("uncaughtException", err => console.error("❌ Excepción no controlada:", err));
 
-// ═══════════════════════════════════════
-// 💬 MENSAJES
-// ═══════════════════════════════════════
+client.on("messageCreate", async message => {
+  if (message.author.bot || !message.guild) return;
+  const content = message.content.trim();
+  if (!content.toLowerCase().startsWith(PREFIX)) return;
 
-client.on("messageCreate", async (message) => {
-  if (message.author.bot) return;
-
-  if (!message.content
-    .toLowerCase()
-    .startsWith(PREFIX)) {
-    return;
-  }
-
-  const args = message.content
-    .slice(PREFIX.length)
-    .trim()
-    .split(/\s+/);
-
-  const command = args
-    .shift()
-    ?.toLowerCase();
-
+  const tokens = content.slice(PREFIX.length).trim().split(/\s+/).filter(Boolean);
+  const command = (tokens.shift() || "").toLowerCase();
   if (!command) return;
-
+  const args = tokens;
   const user = getUser(message.author.id);
+  const reply = text => message.reply({ content: text, allowedMentions: { repliedUser: false } });
 
-  // ═══════════════════════════════════════
-  // 🏓 PING
-  // ═══════════════════════════════════════
+  try {
+    if (command === "ping") return reply(box("🏓 PONG", `┃ ⚡ Latencia: **${client.ws.ping}ms**\n┃ 🤖 Joshua está funcionando.\n┃ 🌐 Estado: **ONLINE 🟢**`));
 
-  if (command === "ping") {
-    return message.reply(
-      box(
-        "🏓 PONG",
-        `┃ ⚡ Latencia: **${client.ws.ping}ms**
-┃ 🤖 Joshua está funcionando.
-┃ 🌐 Estado: **ONLINE 🟢**`
-      )
-    );
-  }
+    if (command === "status") {
+      const seconds = Math.floor(client.uptime / 1000);
+      return reply(box("📡 ESTADO DE JOSHUA", `┃ 🤖 Estado: **ONLINE 🟢**\n┃ ⚡ Ping: **${client.ws.ping}ms**\n┃ ⏱️ Activo: **${Math.floor(seconds / 3600)}h ${Math.floor(seconds % 3600 / 60)}m ${seconds % 60}s**\n┃ 🌐 Servidores: **${client.guilds.cache.size}**`));
+    }
+    if (command === "hola") return reply(box("👋 HOLA", `┃ ¡Hola, ${message.author}! 😎\n┃ 🤖 Joshua te saluda.`));
+    if (command === "info") return reply(box("🤖 JOSHUA", `┃ 🛠️ Versión: **2.0**\n┃ ⚡ Prefijo: **${PREFIX}**\n┃ 💰 Economía: **ACTIVA**\n┃ 🛡️ Administración: **ACTIVA**\n┃ 🌐 Estado: **ONLINE 🟢**`));
 
-  // ═══════════════════════════════════════
-  // 👋 HOLA
-  // ═══════════════════════════════════════
-
-  if (command === "hola") {
-    return message.reply(
-      box(
-        "👋 HOLA",
-        `┃ ¡Hola, ${message.author}! 😎
-┃ ✨ ¡Qué bueno verte por aquí!
-┃ 🤖 Joshua te saluda.`
-      )
-    );
-  }
-
-  // ═══════════════════════════════════════
-  // 🤖 INFO
-  // ═══════════════════════════════════════
-
-  if (command === "info") {
-    return message.reply(
-      box(
-        "🤖 JOSHUA",
-        `┃ 🛠️ Versión: **1.0**
-┃ ⚡ Prefix: **p.**
-┃ 💰 Economía: **ACTIVA**
-┃ 🎮 Diversión: **ACTIVA**
-┃ 🛡️ Administración: **ACTIVA**
-┃ 🌐 Estado: **ONLINE 🟢**`
-      )
-    );
-  }
-
-  // ═══════════════════════════════════════
-  // 📖 HELP
-  // ═══════════════════════════════════════
-
-  if (command === "help") {
-    return message.reply(
-`╔══════════════════════════════════╗
-║       🤖 JOSHUA — AYUDA 📖      ║
-╚══════════════════════════════════╝
-
-💰 ━━━ ECONOMÍA ━━━
-
-> 💵 \`p.balance\` — Ver tu dinero
-> 🏦 \`p.bank\` — Ver tu banco
-> 🎁 \`p.daily\` — Recompensa diaria
-> 💼 \`p.work\` — Trabajar
-> 🕵️ \`p.crimen\` — Misión de riesgo
-> 🧠 \`p.hut\` — Pregunta por dinero
-> 🥷 \`p.rob @usuario\` — Robo virtual
-> 🏦 \`p.dep all\` — Depositar todo
-> 💵 \`p.with all\` — Retirar todo
-> 🎁 \`p.gift @usuario cantidad\` — Regalar
-> 💸 \`p.pay @usuario cantidad\` — Pagar
-
-👤 ━━━ PERFIL ━━━
-
-> 👤 \`p.profile\` — Tu perfil
-> 📊 \`p.stats\` — Tus estadísticas
-> 🔎 \`p.userinfo @usuario\` — Información
-> 🏰 \`p.serverinfo\` — Información del servidor
-> 👑 \`p.rank\` — Ranking
-
-🎮 ━━━ DIVERSIÓN ━━━
-
-> 🪙 \`p.coinflip\` — Lanzar moneda
-> 🎲 \`p.dado\` — Lanzar dado
-> 🎲 \`p.risk\` — Juego de riesgo
-> 🎱 \`p.8ball pregunta\` — Bola mágica
-> 😎 \`p.emoji\` — Emoji aleatorio
-> 🎯 \`p.challenge\` — Reto
-> 📢 \`p.say texto\` — Joshua habla
-
-⚙️ ━━━ UTILIDADES ━━━
-
-> 🏓 \`p.ping\` — Ver latencia
-> 👋 \`p.hola\` — Saludar
-> 🤖 \`p.info\` — Información de Joshua
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-🛡️ ¿Eres administrador?
-
-Usa **p.helpadmin** para ver
-los comandos de administración.
-
-╰━━━━━━━━━━━━━━━━━━━━━━━━━━╯`
-    );
-  }
-
-  // ═══════════════════════════════════════
-  // 🛡️ HELP ADMIN
-  // ══════════���════════════════════════════
-
-  if (command === "helpadmin") {
-    if (!isAdmin(message)) {
-      return message.reply(
-        error(
-          "🚫 Necesitas permisos de Administrador."
-        )
-      );
+    if (command === "help") {
+      return reply(`╔════════════════════════════════════╗
+║      🤖 JOSHUA — AYUDA 📖
+╠════════════════════════════════════╣
+║ 💰 p.balance · p.bank · p.daily
+║ 💼 p.work · p.crimen · p.hut
+║ 🥷 p.rob @usuario
+║ 🏦 p.dep all · p.with all
+║ 🎁 p.gift @usuario cantidad
+║ 💸 p.pay @usuario cantidad
+║ 🛒 p.shop · p.buy objeto · p.sell objeto
+║ 🎒 p.inventory · p.mission
+║ 👤 p.profile · p.stats · p.userinfo
+║ 👑 p.rank
+║ 🪙 p.coinflip · p.dado · p.risk
+║ 🎱 p.8ball pregunta · p.rps opción
+║ 😎 p.emoji · p.challenge · p.choose opciones
+║ 🔢 p.random número · p.joke · p.trivia
+║ 🙌 p.highfive @usuario · p.compliment @usuario
+║ 👀 p.whois @usuario · p.online
+║ 🏰 p.serverinfo · p.channels · p.roles
+║ 😎 p.emojis · p.boosts · p.created
+║ 🏓 p.ping · p.status · p.hola · p.info · p.say texto
+║
+║ 🛡️ Administradores: usa **p.helpadmin**
+╚════════════════════════════════════╝`);
+    }
+    if (command === "helpadmin") {
+      if (!isAdmin(message)) return reply(error("🚫 Necesitas permisos de Administrador."));
+      return reply(`╔════════════════════════════════════╗
+║      🛡️ JOSHUA — ADMIN 🔐
+╠════════════════════════════════════╣
+║ 🔇 p.mute · p.unmute · p.kick
+║ 🔨 p.ban · p.unban ID · p.permaban
+║ ⚠️ p.warn · 🧹 p.purge cantidad
+║ 🔒 p.lock · p.unlock
+║ 🐌 p.slowmode segundos
+║ ✏️ p.nick @usuario nombre
+║ 🏷️ p.roleinfo nombre
+╚════════════════════════════════════╝`);
     }
 
-    return message.reply(
-`╔══════════════════════════════════╗
-║       🛡️ JOSHUA — ADMIN         ║
-╚══════════════════════════════════╝
-
-🔨 ━━━ MODERACIÓN ━━━
-
-> 🔇 \`p.mute @usuario\`
-> 🔊 \`p.unmute @usuario\`
-> 👢 \`p.kick @usuario\`
-> 🔨 \`p.ban @usuario\`
-> 🔓 \`p.unban ID\`
-> ☠️ \`p.permaban @usuario\`
-> ⚠️ \`p.warn @usuario\`
-> 🧹 \`p.purge cantidad\`
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-👑 Todos estos comandos requieren
-**permisos de Administrador**.
-
-🛡️ Usa las herramientas con cuidado.
-
-╰━━━━━━━━━━━━━━━━━━━━━━━━━━╯`
-    );
-  }
-
-  // ════════════════════════��══════════════
-  // 💰 BALANCE
-  // ═══════════════════════════════════════
-
-  if (
-    command === "balance" ||
-    command === "bal"
-  ) {
-    const total =
-      user.cash + user.bank;
-
-    return message.reply(
-      box(
-        "💰 TU ECONOMÍA",
-        `┃ 💵 Efectivo: **${money(user.cash)}**
-┃ 🏦 Banco: **${money(user.bank)}**
-┃ 💎 TOTAL: **${money(total)}**
-┃
-┃ 🔐 El dinero del banco está protegido.`
-      )
-    );
-  }
-
-  // ═══════════════════════════════════════
-  // 🏦 BANK
-  // ═══════════════════════════════════════
-
-  if (command === "bank") {
-    return message.reply(
-      box(
-        "🏦 BANCO",
-        `┃ 🔐 Dinero protegido:
-┃ **${money(user.bank)}**
-┃
-┃ 💵 Efectivo:
-┃ **${money(user.cash)}**
-┃
-┃ 💎 Total:
-┃ **${money(user.cash + user.bank)}**`
-      )
-    );
-  }
-
-  // ═══════════════════════════════════════
-  // 🎁 DAILY
-  // ══════════════════════════════════════���
-
-  if (command === "daily") {
-    const cd =
-      getCooldown(user.daily, 86400);
-
-    if (cd) {
-      return message.reply(error(cd));
+    if (command === "balance" || command === "bal" || command === "bank") {
+      return reply(box(command === "bank" ? "🏦 BANCO" : "💰 TU ECONOMÍA", `┃ 💵 Efectivo: **${money(user.cash)}**\n┃ 🏦 Banco: **${money(user.bank)}**\n┃ 💎 Total: **${money(user.cash + user.bank)}**`));
     }
-
-    const reward = 1000;
-
-    user.cash += reward;
-    user.daily = Date.now();
-
-    saveEconomy();
-
-    return message.reply(
-      success(
-        `🎁 Recompensa diaria: **${money(reward)}**`
-      )
-    );
-  }
-
-  // ═══════════════════════════════════════
-  // 💼 WORK
-  // ═══════════════════════════════════════
-
-  if (command === "work") {
-    const cd =
-      getCooldown(user.work, 30);
-
-    if (cd) {
-      return message.reply(error(cd));
+    if (command === "daily") {
+      const cd = cooldown(user.daily, 86400);
+      if (cd) return reply(error(cd));
+      user.cash += 1000; user.daily = Date.now(); saveEconomy();
+      return reply(success(`🎁 Recompensa diaria: **${money(1000)}**`));
     }
-
-    const reward =
-      random(10, 150);
-
-    user.cash += reward;
-    user.work = Date.now();
-    user.stats.work++;
-
-    saveEconomy();
-
-    return message.reply(
-      success(
-        `💼 Trabajaste y ganaste **${money(reward)}**.`
-      )
-    );
-  }
-
-  // ═══════════════════════════════════════
-  // 🕵️ CRIMEN
-  // ═══════════════════════���═══════════════
-
-  if (command === "crimen") {
-    const cd =
-      getCooldown(user.crime, 120);
-
-    if (cd) {
-      return message.reply(error(cd));
+    if (command === "work") {
+      const cd = cooldown(user.work, 30);
+      if (cd) return reply(error(cd));
+      const reward = random(10, 150); user.cash += reward; user.work = Date.now(); user.stats.work++; saveEconomy();
+      return reply(success(`💼 Trabajaste y ganaste **${money(reward)}**.`));
     }
-
-    user.crime = Date.now();
-    user.stats.crime++;
-
-    if (Math.random() < 0.20) {
-      const reward =
-        random(300, 500);
-
-      user.cash += reward;
-
-      saveEconomy();
-
-      return message.reply(
-        success(
-          `🕵️ ¡La misión salió bien!
-┃ 💰 Ganaste **${money(reward)}**.`
-        )
-      );
+    if (command === "crimen") {
+      const cd = cooldown(user.crime, 120);
+      if (cd) return reply(error(cd));
+      user.crime = Date.now(); user.stats.crime++;
+      if (Math.random() < 0.2) { const reward = random(300, 500); user.cash += reward; saveEconomy(); return reply(success(`🕵️ ¡La misión salió bien!\n┃ 💰 Ganaste **${money(reward)}**.`)); }
+      const loss = Math.min(user.cash, random(200, 600)); user.cash -= loss; saveEconomy();
+      return reply(error(`🚨 La misión salió mal.\n┃ 💸 Perdiste **${money(loss)}**.`));
     }
-
-    const loss =
-      Math.min(
-        user.cash,
-        random(200, 600)
-      );
-
-    user.cash -= loss;
-
-    saveEconomy();
-
-    return message.reply(
-      error(
-        `🚨 La misión salió mal.
-┃ 💸 Perdiste **${money(loss)}**.`
-      )
-    );
-  }
-
-  // ═══════════════════════════════════════
-  // 🧠 HUT
-  // ═══════════════════════════════════════
-
-  if (command === "hut") {
-    const cd =
-      getCooldown(user.hut, 180);
-
-    if (cd) {
-      return message.reply(error(cd));
-    }
-
-    const questions = [
-      {
-        q: "¿Cuánto es 7 × 8?",
-        a: "56"
-      },
-      {
-        q: "¿Cuál es el planeta rojo?",
-        a: "marte"
-      },
-      {
-        q: "¿Cuántos días tiene una semana?",
-        a: "7"
-      },
-      {
-        q: "¿Cuál es la capital de Francia?",
-        a: "paris"
-      }
-    ];
-
-    const question =
-      questions[
-        random(0, questions.length - 1)
+    if (command === "hut" || command === "trivia") {
+      const isHut = command === "hut";
+      const cd = isHut ? cooldown(user.hut, 180) : null;
+      if (cd) return reply(error(cd));
+      const questions = isHut ? [
+        ["¿Cuánto es 7 × 8?", "56"], ["¿Cuál es el planeta rojo?", "marte"],
+        ["¿Cuántos días tiene una semana?", "7"], ["¿Cuál es la capital de Francia?", "paris"]
+      ] : [
+        ["¿Cuál es el planeta más grande?", "jupiter"], ["¿Cuál es el océano más grande?", "pacifico"],
+        ["¿Cuál es la capital de Francia?", "paris"], ["¿Cuál es el animal terrestre más grande?", "elefante"]
       ];
-
-    user.hut = Date.now();
-
-    await message.reply(
-      `╭━━━〔 🧠 PREGUNTA 〕━━━╮
-┃ ❓ ${question.q}
-┃
-┃ ⏳ Tienes **30 segundos**.
-╰━━━━━━━━━━━━━━━━━━━━╯`
-    );
-
-    try {
-      const collected =
-        await message.channel.awaitMessages({
-          filter: m =>
-            m.author.id ===
-            message.author.id,
-          max: 1,
-          time: 30000
-        });
-
-      const answer =
-        collected.first()
-          .content
-          .toLowerCase()
-          .trim();
-
-      if (answer === question.a) {
-        const reward =
-          random(200, 500);
-
-        user.cash += reward;
-
-        saveEconomy();
-
-        return message.reply(
-          success(
-            `🧠 ¡Correcto!
-┃ 💰 Ganaste **${money(reward)}**.`
-          )
-        );
+      const question = questions[random(0, questions.length - 1)];
+      if (isHut) user.hut = Date.now();
+      await reply(`╭━━━〔 🧠 PREGUNTA 〕━━━╮\n┃ ❓ ${question[0]}\n┃ ⏳ Tienes **${isHut ? 30 : 20} segundos**.\n╰━━━━━━━━━━━━━━━━━━━━╯`);
+      const collected = await message.channel.awaitMessages({ filter: m => m.author.id === message.author.id && !m.author.bot, max: 1, time: isHut ? 30000 : 20000 });
+      const answer = collected.first();
+      if (!answer) return reply(error("⏰ Se acabó el tiempo."));
+      if (answer.content.toLowerCase().trim() === question[1]) {
+        if (isHut) { const reward = random(200, 500); user.cash += reward; saveEconomy(); return reply(success(`🧠 ¡Correcto!\n┃ 💰 Ganaste **${money(reward)}**.`)); }
+        return reply(success("🧠 ¡Correcto! 🎉"));
       }
-
-      const loss =
-        Math.min(
-          user.cash,
-          random(300, 500)
-        );
-
-      user.cash -= loss;
-
-      saveEconomy();
-
-      return message.reply(
-        error(
-          `❌ Respuesta incorrecta.
-┃ 💸 Perdiste **${money(loss)}**.`
-        )
-      );
-
-    } catch {
-      return message.reply(
-        error(
-          "⏰ Se acabó el tiempo."
-        )
-      );
+      if (isHut) { const loss = Math.min(user.cash, random(300, 500)); user.cash -= loss; saveEconomy(); return reply(error(`❌ Respuesta incorrecta.\n┃ 💸 Perdiste **${money(loss)}**.`)); }
+      return reply(error(`❌ Incorrecto. La respuesta era **${question[1]}**.`));
     }
+    if (command === "rob") {
+      const cd = cooldown(user.rob, 300); if (cd) return reply(error(cd));
+      const target = mentionedUser(message);
+      if (!target) return reply(error("🥷 Menciona a alguien."));
+      if (target.id === message.author.id) return reply(error("😂 No puedes robarte a ti mismo."));
+      const victim = getUser(target.id);
+      if (victim.cash <= 0) return reply(error("💸 Esa persona no tiene efectivo."));
+      user.rob = Date.now();
+      if (Math.random() < 0.5) { const amount = Math.min(victim.cash, random(50, Math.max(50, victim.cash))); victim.cash -= amount; user.cash += amount; user.stats.rob++; saveEconomy(); return reply(success(`🥷 ¡Robo exitoso!\n┃ 💰 Conseguí **${money(amount)}**.`)); }
+      saveEconomy(); return reply(error("🚨 ¡Te descubrieron! El robo falló."));
+    }
+    if (command === "dep" || command === "deposit" || command === "with" || command === "withdraw") {
+      if (args[0]?.toLowerCase() !== "all") return reply(error(`Usa: **p.${command === "with" || command === "withdraw" ? "with" : "dep"} all**`));
+      if (command === "dep" || command === "deposit") { if (user.cash <= 0) return reply(error("💵 No tienes efectivo.")); const amount = user.cash; user.bank += amount; user.cash = 0; saveEconomy(); return reply(success(`🏦 Depositaste **${money(amount)}**.`)); }
+      if (user.bank <= 0) return reply(error("🏦 No tienes dinero en el banco.")); const amount = user.bank; user.cash += amount; user.bank = 0; saveEconomy(); return reply(success(`💵 Retiraste **${money(amount)}**.`));
+    }
+    if (command === "gift" || command === "pay") {
+      const target = mentionedUser(message); const amount = parseAmount(args[1]);
+      if (!target || !amount) return reply(error(`Usa: **p.${command} @usuario cantidad**`));
+      if (target.id === message.author.id) return reply(error("😂 No puedes enviarte dinero a ti mismo."));
+      if (user.cash < amount) return reply(error("💸 No tienes suficiente efectivo."));
+      const receiver = getUser(target.id); user.cash -= amount; receiver.cash += amount;
+      if (command === "gift") user.stats.gifts++; saveEconomy();
+      return reply(success(`${command === "gift" ? "🎁 Regalaste" : "💸 Enviaste"} **${money(amount)}** a **${target.username}**.`));
+    }
+
+    const items = { snack: 100, headphones: 500, controller: 1000, diamond: 2500, crown: 5000 };
+    if (command === "shop") return reply(box("🛒 TIENDA", Object.entries(items).map(([item, price]) => `┃ 🛍️ ${item} — **${money(price)}**`).join("\n")));
+    if (command === "buy") {
+      const item = args[0]?.toLowerCase(); if (!item || !items[item]) return reply(error("🛒 Ese objeto no existe. Usa p.shop."));
+      if (user.cash < items[item]) return reply(error(`💸 Necesitas **${money(items[item])}**.`));
+      user.cash -= items[item]; user.inventory[item] = (user.inventory[item] || 0) + 1; saveEconomy(); return reply(success(`🛍️ Compraste **${item}** por **${money(items[item])}**.`));
+    }
+    if (command === "inventory") {
+      const entries = Object.entries(user.inventory); return reply(box("🎒 INVENTARIO", entries.length ? entries.map(([item, count]) => `┃ 📦 **${item}** × ${count}`).join("\n") : "┃ 😢 Tu inventario está vacío."));
+    }
+    if (command === "sell") {
+      const item = args[0]?.toLowerCase(); if (!item || !items[item]) return reply(error("💵 Ese objeto no se puede vender."));
+      if (!user.inventory[item]) return reply(error("🎒 No tienes ese objeto."));
+      user.inventory[item]--; if (user.inventory[item] <= 0) delete user.inventory[item]; const reward = Math.floor(items[item] / 2); user.cash += reward; saveEconomy(); return reply(success(`💵 Vendiste **${item}** por **${money(reward)}**.`));
+    }
+    if (command === "mission") { const reward = random(200, 350); user.cash += reward; saveEconomy(); return reply(success(`🎯 Misión completada.\n┃ 💰 Recompensa: **${money(reward)}**`)); }
+    if (command === "profile" || command === "stats") return reply(box(command === "profile" ? `👤 PERFIL DE ${message.author.username}` : "📊 TUS ESTADÍSTICAS", `┃ 💵 Efectivo: **${money(user.cash)}**\n┃ 🏦 Banco: **${money(user.bank)}**\n┃ 💎 Total: **${money(user.cash + user.bank)}**\n┃ 💼 Trabajos: **${user.stats.work}**\n┃ 🕵️ Crímenes: **${user.stats.crime}**\n┃ 🥷 Robos: **${user.stats.rob}**\n┃ 🎁 Regalos: **${user.stats.gifts}**`));
+    if (command === "rank") {
+      const ranking = Object.entries(economy).map(([id, data]) => ({ id, total: (data.cash || 0) + (data.bank || 0) })).sort((a, b) => b.total - a.total).slice(0, 10);
+      const lines = []; for (const [index, entry] of ranking.entries()) { const member = await message.guild.members.fetch(entry.id).catch(() => null); lines.push(`┃ ${["🥇", "🥈", "🥉"][index] || "🏅"} **${member?.user.username || "Usuario"}** — ${money(entry.total)}`); }
+      return reply(box("👑 TOP 10 RICOS", lines.join("\n") || "┃ 😢 Todavía no hay jugadores."));
+    }
+
+    if (command === "coinflip") return reply(box("🪙 MONEDA", `┃ Resultado: **${Math.random() < 0.5 ? "CARA" : "CRUZ"} 🪙**`));
+    if (command === "risk") { const cd = cooldown(user.risk, 30); if (cd) return reply(error(cd)); user.risk = Date.now(); const won = Math.random() < 0.5; saveEconomy(); return reply(won ? success("🎲 ¡Superaste el reto de riesgo!") : error("🎲 El reto no salió bien.")); }
+    if (command === "dado") return reply(box("🎲 DADO", `┃ Resultado: **${random(1, 6)}**`));
+    if (command === "8ball") { if (!args.length) return reply(error("🎱 Haz una pregunta. Ejemplo: p.8ball ¿ganaré?")); const answers = ["Sí.", "No.", "Probablemente.", "Definitivamente.", "No estoy seguro.", "Pregunta más tarde."]; return reply(box("🎱 8BALL", `┃ ❓ ${args.join(" ")}\n┃ 🔮 **${answers[random(0, answers.length - 1)]}**`)); }
+    if (command === "emoji") { const emojis = ["😂", "🤣", "😎", "🔥", "💀", "👑", "🚀", "💎", "🤖", "🎮", "⚡", "🤑"]; return reply(`🎰 Emoji aleatorio: **${emojis[random(0, emojis.length - 1)]}**`); }
+    if (command === "challenge") { const challenges = ["🎮 Juega una partida.", "😂 Envía un meme.", "🧠 Resuelve un acertijo.", "👋 Saluda a alguien.", "🔥 Escribe un mensaje usando solo emojis."]; return reply(box("🎯 RETO", `┃ ${challenges[random(0, challenges.length - 1)]}`)); }
+    if (command === "rps") { const choices = ["piedra", "papel", "tijera"]; const choice = args[0]?.toLowerCase(); if (!choices.includes(choice)) return reply(error("Usa: p.rps piedra | papel | tijera")); const bot = choices[random(0, 2)]; const win = (choice === "piedra" && bot === "tijera") || (choice === "papel" && bot === "piedra") || (choice === "tijera" && bot === "papel"); return reply(box("🎮 PIEDRA • PAPEL • TIJERA", `┃ 👤 Tú: **${choice}**\n┃ 🤖 Joshua: **${bot}**\n┃ ${choice === bot ? "🤝 ¡Empate!" : win ? "🎉 ¡Ganaste!" : "😅 ¡Ganó Joshua!"}`)); }
+    if (command === "joke") return reply(box("😂 CHISTE", "┃ ¿Qué le dijo un techo a otro? Techo de menos."));
+    if (command === "choose") { if (args.length < 2) return reply(error("Usa: p.choose opción1 opción2")); return reply(box("🎯 ELECCIÓN", `┃ Joshua eligió: **${args[random(0, args.length - 1)]}**`)); }
+    if (command === "random") { const max = Math.max(1, Math.min(parseInt(args[0], 10) || 100, 1000000)); return reply(`🔢 Número aleatorio entre **1-${max}**: **${random(1, max)}**`); }
+    if (command === "highfive" || command === "compliment") { const target = mentionedUser(message); if (!target) return reply(error("Menciona a alguien.")); return reply(command === "highfive" ? `🙌 **${message.author.username}** le dio un high-five a **${target.username}**! ✋🔥` : `⭐ **${target.username}**, ¡eres una leyenda! 👑`); }
+    if (command === "say") { if (!args.length) return reply(error("Escribe algo después de p.say.")); if (!isAdmin(message)) return reply(error("🚫 Necesitas permisos de Administrador.")); await message.delete().catch(() => {}); return message.channel.send(args.join(" ")); }
+
+    if (command === "whois") {
+      const target = mentionedUser(message) || message.author; const member = await message.guild.members.fetch(target.id).catch(() => null);
+      return reply(box("👀 WHOIS", `┃ 👤 Usuario: **${target.username}**\n┃ 🆔 ID: **${target.id}**\n┃ 📅 Cuenta: <t:${Math.floor(target.createdTimestamp / 1000)}:D>\n┃ 🏰 Entrada: ${member?.joinedTimestamp ? `<t:${Math.floor(member.joinedTimestamp / 1000)}:D>` : "No disponible"}`));
+    }
+    if (command === "online") return reply(box("🟢 MIEMBROS ONLINE", `┃ 👥 Online detectados: **${message.guild.members.cache.filter(m => m.presence?.status && m.presence.status !== "offline").size}**`));
+    if (command === "serverinfo") { const guild = message.guild; return reply(box("🏰 INFORMACIÓN DEL SERVIDOR", `┃ 🏰 Nombre: **${guild.name}**\n┃ 👑 Dueño: <@${guild.ownerId}>\n┃ 👥 Miembros: **${guild.memberCount}**\n┃ 💬 Canales: **${guild.channels.cache.size}**\n┃ 🏷️ Roles: **${guild.roles.cache.size}**\n┃ 😀 Emojis: **${guild.emojis.cache.size}**\n┃ 🚀 Boosts: **${guild.premiumSubscriptionCount || 0}**\n┃ 📅 Creado: <t:${Math.floor(guild.createdTimestamp / 1000)}:D>`)); }
+    if (command === "channels") { const channels = message.guild.channels.cache; return reply(box("📚 CANALES", `┃ 💬 Texto: **${channels.filter(c => c.type === ChannelType.GuildText).size}**\n┃ 🔊 Voz: **${channels.filter(c => c.type === ChannelType.GuildVoice).size}**\n┃ 📚 Total: **${channels.size}**`)); }
+    if (command === "roles") { const roles = message.guild.roles.cache.filter(r => r.id !== message.guild.id).sort((a, b) => b.position - a.position).first(30); return reply(box("🏷️ ROLES", roles.map(r => `┃ ${r.name}`).join("\n") || "┃ Sin roles")); }
+    if (command === "emojis") return reply(box("😎 EMOJIS", message.guild.emojis.cache.map(e => e.toString()).join(" ") || "┃ Este servidor no tiene emojis personalizados."));
+    if (command === "boosts") return reply(box("🚀 BOOSTS", `┃ 🚀 Nivel: **${message.guild.premiumTier}**\n┃ 💎 Boosts: **${message.guild.premiumSubscriptionCount || 0}**`));
+    if (command === "created") return reply(box("📅 SERVIDOR", `┃ Creado: <t:${Math.floor(message.guild.createdTimestamp / 1000)}:F>`));
+    if (command === "userinfo" || command === "user") { const member = mentionedMember(message) || message.member; const roles = member.roles.cache.filter(r => r.id !== message.guild.id).map(r => r.name).slice(0, 10).join(", ") || "Ninguno"; return reply(box("👤 INFORMACIÓN", `┃ 👤 Usuario: **${member.user.username}**\n┃ 🆔 ID: **${member.id}**\n┃ 🏷️ Apodo: **${member.nickname || "Ninguno"}**\n┃ 📅 Cuenta: <t:${Math.floor(member.user.createdTimestamp / 1000)}:D>\n┃ 🏰 Entrada: ${member.joinedTimestamp ? `<t:${Math.floor(member.joinedTimestamp / 1000)}:D>` : "No disponible"}\n┃ 🎭 Roles: **${roles}**`)); }
+
+    const adminCommands = ["mute", "unmute", "kick", "ban", "unban", "permaban", "warn", "purge", "lock", "unlock", "slowmode", "nick", "roleinfo"];
+    if (adminCommands.includes(command)) {
+      if (!isAdmin(message)) return reply(error("🚫 Necesitas permisos de Administrador."));
+      if (command === "unban") { const id = args[0]; if (!/^\d{17,20}$/.test(id || "")) return reply(error("Usa: p.unban ID válido.")); await message.guild.members.unban(id).then(() => reply(success(`🔓 Usuario **${id}** desbaneado.`))).catch(() => reply(error("❌ No encontré ese usuario en los baneados."))); return; }
+      if (command === "purge") { const amount = parseInt(args[0], 10); if (!Number.isInteger(amount) || amount < 1 || amount > 99) return reply(error("🧹 Usa una cantidad entre 1 y 99.")); const deleted = await message.channel.bulkDelete(amount, true).catch(() => null); if (!deleted) return reply(error("❌ No pude borrar los mensajes.")); const msg = await message.channel.send(success(`🧹 Eliminé **${deleted.size} mensajes**.`)); setTimeout(() => msg.delete().catch(() => {}), 4000); return; }
+      if (command === "lock" || command === "unlock") { await message.channel.permissionOverwrites.edit(message.guild.roles.everyone, { SendMessages: command === "lock" ? false : null }).then(() => reply(success(command === "lock" ? "🔒 Este canal ha sido bloqueado." : "🔓 Este canal ha sido desbloqueado."))).catch(() => reply(error("❌ No pude cambiar los permisos del canal."))); return; }
+      if (command === "slowmode") { const seconds = parseInt(args[0], 10); if (!Number.isInteger(seconds) || seconds < 0 || seconds > 21600 || typeof message.channel.setRateLimitPerUser !== "function") return reply(error("🐌 Usa entre 0 y 21600 segundos en un canal de texto.")); await message.channel.setRateLimitPerUser(seconds).then(() => reply(success(`🐌 Slowmode establecido en **${seconds} segundos**.`))).catch(() => reply(error("❌ No pude configurar el slowmode."))); return; }
+      if (command === "roleinfo") { const name = args.join(" ").toLowerCase(); const role = message.guild.roles.cache.find(r => r.name.toLowerCase() === name); if (!role) return reply(error("❌ No encontré ese rol.")); return reply(box("🏷️ INFORMACIÓN DEL ROL", `┃ 🏷️ Nombre: **${role.name}**\n┃ 🆔 ID: **${role.id}**\n┃ 👥 Miembros: **${role.members.size}**\n┃ 📌 Posición: **${role.position}**\n┃ 🎨 Color: **${role.hexColor}**\n┃ 🔐 Mencionable: **${role.mentionable ? "Sí" : "No"}`)); }
+      const member = mentionedMember(message); if (!member) return reply(error("Menciona a un usuario."));
+      if (command === "warn") return reply(`⚠️ **${member.user.username}** ha recibido una advertencia de **${message.author.username}**.`);
+      if (!canModerate(message, member)) return reply(error("❌ No puedo moderar a ese usuario por su jerarquía o permisos."));
+      if (command === "nick") { const nick = args.slice(1).join(" ").trim(); if (!nick) return reply(error("✏️ Escribe el nuevo apodo.")); await member.setNickname(nick).then(() => reply(success(`✏️ Nuevo apodo: **${nick}**`))).catch(() => reply(error("❌ No pude cambiar el apodo."))); return; }
+      if (command === "mute" || command === "unmute") { await member.timeout(command === "mute" ? 3600000 : null, `${command} por ${message.author.tag}`).then(() => reply(success(command === "mute" ? `🔇 **${member.user.username}** fue silenciado durante 1 hora.` : `🔊 Se quitó el silencio a **${member.user.username}**.`))).catch(() => reply(error("❌ No pude aplicar esa acción."))); return; }
+      if (command === "kick") { await member.kick(`Kick por ${message.author.tag}`).then(() => reply(success(`👢 **${member.user.username}** fue expulsado.`))).catch(() => reply(error("❌ No pude expulsar al usuario."))); return; }
+      await member.ban({ reason: `${command} por ${message.author.tag}` }).then(() => reply(success(`🔨 **${member.user.username}** fue baneado.`))).catch(() => reply(error("❌ No pude banear al usuario."))); return;
+    }
+
+    return reply(error(`No conozco **${PREFIX}${command}**. Usa **${PREFIX}help**.`));
+  } catch (err) {
+    console.error(`Error en p.${command}:`, err);
+    return reply(error("Ocurrió un error al ejecutar el comando."));
   }
-
-  // ═══════════════════════════════════════
-  // 🥷 ROB
-  // ═══════════════════════════════════════
-
-  if (command === "rob") {
-    const cd =
-      getCooldown(user.rob, 300);
-
-    if (cd) {
-      return message.reply(error(cd));
-    }
-
-    const target =
-      message.mentions.users.first();
-
-    if (!target) {
-      return message.reply(
-        error(
-          "🥷 Menciona a alguien."
-        )
-      );
-    }
-
-    if (
-      target.id ===
-      message.author.id
-    ) {
-      return message.reply(
-        error(
-          "😂 No puedes robarte a ti mismo."
-        )
-      );
-    }
-
-    const victim =
-      getUser(target.id);
-
-    if (victim.cash <= 0) {
-      return message.reply(
-        error(
-          "💸 Esa persona no tiene efectivo."
-        )
-      );
-    }
-
-    user.rob = Date.now();
-
-    if (Math.random() < 0.50) {
-      const amount =
-        Math.min(
-          victim.cash,
-          random(
-            50,
-            Math.max(50, victim.cash)
-          )
-        );
-
-      victim.cash -= amount;
-      user.cash += amount;
-      user.stats.rob++;
-
-      saveEconomy();
-
-      return message.reply(
-        success(
-          `🥷 ¡Robo exitoso!
-┃ 💰 Conseguí **${money(amount)}**.`
-        )
-      );
-    }
-
-    saveEconomy();
-
-    return message.reply(
-      error(
-        "🚨 ¡Te descubrieron! El robo falló."
-      )
-    );
-  }
-
-  // ═══════════════════════════════════════
-  // 🏦 DEPOSITAR
-  // ═══════════════════════════════════════
-
-  if (
-    command === "dep" ||
-    command === "deposit"
-  ) {
-    if (
-      args[0]?.toLowerCase() !==
-      "all"
-    ) {
-      return message.reply(
-        error(
-          "🏦 Usa: `p.dep all`"
-        )
-      );
-    }
-
-    if (user.cash <= 0) {
-      return message.reply(
-        error(
-          "💵 No tienes efectivo."
-        )
-      );
-    }
-
-    const amount = user.cash;
-
-    user.bank += amount;
-    user.cash = 0;
-
-    saveEconomy();
-
-    return message.reply(
-      success(
-        `🏦 Depositaste **${money(amount)}**.`
-      )
-    );
-  }
-
-  // ═══════════════════════════════════════
-  // 💵 RETIRAR
-  // ═══════════════════════════════════════
-
-  if (
-    command === "with" ||
-    command === "withdraw"
-  ) {
-    if (
-      args[0]?.toLowerCase() !==
-      "all"
-    ) {
-      return message.reply(
-        error(
-          "💵 Usa: `p.with all`"
-        )
-      );
-    }
-
-    if (user.bank <= 0) {
-      return message.reply(
-        error(
-          "🏦 No tienes dinero en el banco."
-        )
-      );
-    }
-
-    const amount = user.bank;
-
-    user.cash += amount;
-    user.bank = 0;
-
-    saveEconomy();
-
-    return message.reply(
-      success(
-        `💵 Retiraste **${money(amount)}**.`
-      )
-    );
-  }
-
-  // ═══════════════════════════════════════
-  // 🎁 GIFT
-  // ═══════════════════════════════════════
-
-  if (command === "gift") {
-    const target =
-      message.mentions.users.first();
-
-    const amount =
-      parseInt(args[1]);
-
-    if (
-      !target ||
-      !amount ||
-      amount <= 0
-    ) {
-      return message.reply(
-        error(
-          "🎁 Usa: `p.gift @usuario cantidad`"
-        )
-      );
-    }
-
-    if (
-      target.id ===
-      message.author.id
-    ) {
-      return message.reply(
-        error(
-          "😂 No puedes regalarte dinero."
-        )
-      );
-    }
-
-    if (user.cash < amount) {
-      return message.reply(
-        error(
-          "💸 No tienes suficiente efectivo."
-        )
-      );
-    }
-
-    const receiver =
-      getUser(target.id);
-
-    user.cash -= amount;
-    receiver.cash += amount;
-    user.stats.gifts++;
-
-    saveEconomy();
-
-    return message.reply(
-      success(
-        `🎁 Regalaste **${money(amount)}** a **${target.username}**.`
-      )
-    );
-  }
-
-  // ═══════════════════════════════════════
-  // 💸 PAY
-  // ═══════════════════════════════════════
-
-  if (command === "pay") {
-    const target =
-      message.mentions.users.first();
-
-    const amount =
-      parseInt(args[1]);
-
-    if (
-      !target ||
-      !amount ||
-      amount <= 0
-    ) {
-      return message.reply(
-        error(
-          "💸 Usa: `p.pay @usuario cantidad`"
-        )
-      );
-    }
-
-    if (
-      target.id ===
-      message.author.id
-    ) {
-      return message.reply(
-        error(
-          "😂 No puedes pagarte a ti mismo."
-        )
-      );
-    }
-
-    if (user.cash < amount) {
-      return message.reply(
-        error(
-          "💰 No tienes suficiente dinero."
-        )
-      );
-    }
-
-    const receiver =
-      getUser(target.id);
-
-    user.cash -= amount;
-    receiver.cash += amount;
-
-    saveEconomy();
-
-    return message.reply(
-      success(
-        `💸 Enviaste **${money(amount)}** a **${target.username}**.`
-      )
-    );
-  }
-
-  // ═══════════════════════════════════════
-  // 🪙 COINFLIP
-  // ═══════════════════════════════════════
-
-  if (command === "coinflip") {
-    const result =
-      Math.random() < 0.5
-        ? "CARA 🪙"
-        : "CRUZ 🪙";
-
-    return message.reply(
-      box(
-        "🪙 COINFLIP",
-        `┃ 🎯 Resultado:
-┃
-┃ **${result}**`
-      )
-    );
-  }
-
-  // ═══════════════════════════════════════
-  // 🎲 RISK
-  // ═══════════════════════════════════════
-
-  if (command === "risk") {
-    const cd =
-      getCooldown(user.risk, 60);
-
-    if (cd) {
-      return message.reply(error(cd));
-    }
-
-    user.risk = Date.now();
-
-    if (Math.random() < 0.30) {
-      const reward =
-        random(100, 300);
-
-      user.cash += reward;
-
-      saveEconomy();
-
-      return message.reply(
-        success(
-          `🎲 ¡Ganaste!
-┃ 💰 Recibiste **${money(reward)}**.`
-        )
-      );
-    }
-
-    const loss =
-      Math.min(
-        user.cash,
-        random(100, 400)
-      );
-
-    user.cash -= loss;
-
-    saveEconomy();
-
-    return message.reply(
-      error(
-        `🎲 Salió mal.
-┃ 💸 Perdiste **${money(loss)}**.`
-      )
-    );
-  }
-
-  // ═══════════════════════════════════════
-  // 👤 PROFILE
-  // ═══════════════════════════════════════
-
-  if (command === "profile") {
-    const total =
-      user.cash + user.bank;
-
-    return message.reply(
-      box(
-        `👤 PERFIL DE ${message.author.username}`,
-        `┃ 💵 Efectivo: **${money(user.cash)}**
-┃ 🏦 Banco: **${money(user.bank)}**
-┃ 💎 Total: **${money(total)}**
-┃
-┃ 💼 Trabajos: **${user.stats.work}**
-┃ 🕵️ Misiones: **${user.stats.crime}**
-┃ 🥷 Robos: **${user.stats.rob}**
-┃ 🎁 Regalos: **${user.stats.gifts}**`
-      )
-    );
-  }
-
-  // ═══════════════════════════════════════
-  // 📊 STATS
-  // ═══════════════════════════════════════
-
-  if (command === "stats") {
-    return message.reply(
-      box(
-        "📊 TUS ESTADÍSTICAS",
-        `┃ 💼 Trabajos: **${user.stats.work}**
-┃ 🕵️ Misiones: **${user.stats.crime}**
-┃ 🥷 Robos: **${user.stats.rob}**
-┃ 🎁 Regalos: **${user.stats.gifts}**`
-      )
-    );
-  }
-
-  // ═══════════════════════════════════════
-  // 👑 RANK
-  // ═══════════════════════════════════════
-
-  if (command === "rank") {
-    const ranking =
-      Object.entries(economy)
-        .map(([id, data]) => ({
-          id,
-          total:
-            data.cash + data.bank
-        }))
-        .sort(
-          (a, b) =>
-            b.total - a.total
-        )
-        .slice(0, 10);
-
-    let text = "";
-
-    for (
-      let i = 0;
-      i < ranking.length;
-      i++
-    ) {
-      const item = ranking[i];
-
-      let member = null;
-
-      try {
-        member =
-          await message.guild.members.fetch(
-            item.id
-          );
-      } catch {}
-
-      const name =
-        member?.user.username ||
-        "Usuario";
-
-      const medals = [
-        "🥇",
-        "🥈",
-        "🥉"
-      ];
-
-      const medal =
-        medals[i] ||
-        "🏅";
-
-      text +=
-        `┃ ${medal} **${name}** — ${money(item.total)}\n`;
-    }
-
-    return message.reply(
-      box(
-        "👑 TOP 10 RICOS",
-        text ||
-          "┃ 😢 Todavía no hay jugadores."
-      )
-    );
-  }
-
-  // ═══════════════════════════════════════
-  // 🎲 DADO
-  // ═══════════════════════════════════════
-
-  if (command === "dado") {
-    const result =
-      random(1, 6);
-
-    return message.reply(
-      box(
-        "🎲 DADO",
-        `┃ 🎯 Resultado:
-┃
-┃ **${result}**`
-      )
-    );
-  }
-
-  // ═══════════════════════════════════════
-  // 🎱 8BALL
-  // ═══════════════════════════════════════
-
-  if (command === "8ball") {
-    if (!args.length) {
-      return message.reply(
-        error(
-          "🎱 Hazme una pregunta."
-        )
-      );
-    }
-
-    const answers = [
-      "🎯 Sí.",
-      "🤔 Probablemente.",
-      "✨ Definitivamente.",
-      "😬 No estoy seguro.",
-      "❌ No.",
-      "🔮 Las estrellas dicen que sí.",
-      "🌙 Pregunta más tarde."
-    ];
-
-    const answer =
-      answers[
-        random(
-          0,
-          answers.length - 1
-        )
-      ];
-
-    return message.reply(
-      box(
-        "🎱 MAGIC 8BALL",
-        `┃ ❓ Pregunta:
-┃ ${args.join(" ")}
-┃
-┃ 🔮 Respuesta:
-┃ **${answer}**`
-      )
-    );
-  }
-
-  // ═══════════════════════════════════════
-  // 😎 EMOJI
-  // ═══════════════════════════════════════
-
-  if (command === "emoji") {
-    const emojis = [
-      "😀",
-      "😂",
-      "😎",
-      "🤯",
-      "🔥",
-      "💀",
-      "👑",
-      "🚀",
-      "🎉",
-      "🤖",
-      "🤑",
-      "🥶"
-    ];
-
-    const emoji =
-      emojis[
-        random(
-          0,
-          emojis.length - 1
-        )
-      ];
-
-    return message.reply(
-      box(
-        "😎 EMOJI",
-        `┃ Tu emoji es:
-┃
-┃ ${emoji}`
-      )
-    );
-  }
-
-  // ═══════════════════════════════════════
-  // 🎯 CHALLENGE
-  // ═══════════════════════════════════════
-
-  if (command === "challenge") {
-    const challenges = [
-      "🎯 Escribe un mensaje usando solo emojis.",
-      "😂 Cuenta un chiste.",
-      "🧠 Di una capital de un país.",
-      "🎮 Di tu videojuego favorito.",
-      "⚡ Escribe una palabra al revés."
-    ];
-
-    const challenge =
-      challenges[
-        random(
-          0,
-          challenges.length - 1
-        )
-      ];
-
-    return message.reply(
-      box(
-        "🎯 RETO",
-        `┃ ${challenge}`
-      )
-    );
-  }
-
-  // ═══════════════════════════════════════
-  // 📢 SAY
-  // ═══════════════════════════════════════
-
-  if (command === "say") {
-    if (!args.length) {
-      return message.reply(
-        error(
-          "📢 Escribe algo después de `p.say`."
-        )
-      );
-    }
-
-    return message.reply(
-      box(
-        "📢 JOSHUA DICE",
-        `┃ ${args.join(" ")}`
-      )
-    );
-  }
-
-  // ═══════════════════════════════════════
-  // 🏰 SERVERINFO
-  // ═══════════════════════════════════════
-
-  if (command === "serverinfo") {
-    const guild =
-      message.guild;
-
-    const humans =
-      guild.members.cache.filter(
-        member => !member.user.bot
-      ).size;
-
-    const bots =
-      guild.members.cache.filter(
-        member => member.user.bot
-      ).size;
-
-    return message.reply(
-      box(
-        "🏰 INFORMACIÓN DEL SERVIDOR",
-        `┃ 🏠 Nombre: **${guild.name}**
-┃ 🆔 ID: \`${guild.id}\`
-┃ 👑 Dueño: <@${guild.ownerId}>
-┃ 👥 Miembros: **${guild.memberCount}**
-┃ 👤 Humanos: **${humans}**
-┃ 🤖 Bots: **${bots}**
-┃ 💬 Canales: **${guild.channels.cache.size}**
-┃ 🎭 Roles: **${guild.roles.cache.size}**
-┃ 📅 Creado: <t:${Math.floor(guild.createdTimestamp / 1000)}:D>`
-      )
-    );
-  }
-
-  // ═══════════════════════════════════════
-  // 👤 USERINFO
-  // ═══════════════════════════════════════
-
-  if (
-    command === "userinfo" ||
-    command === "user"
-  ) {
-    const member =
-      message.mentions.members.first() ||
-      message.member;
-
-    const targetUser =
-      member.user;
-
-    const roles =
-      member.roles.cache
-        .filter(
-          role =>
-            role.id !==
-            message.guild.id
-        )
-        .map(role => role.name)
-        .slice(0, 10)
-        .join(", ") ||
-      "Ninguno";
-
-    return message.reply(
-      box(
-        "👤 INFORMACIÓN DEL USUARIO",
-        `┃ 👤 Usuario: **${targetUser.username}**
-┃ 🆔 ID: \`${targetUser.id}\`
-┃ 🤖 Bot: **${targetUser.bot ? "Sí" : "No"}**
-┃ 📅 Cuenta: <t:${Math.floor(targetUser.createdTimestamp / 1000)}:D>
-┃ 📥 Entró: <t:${Math.floor(member.joinedTimestamp / 1000)}:D>
-┃ 🎭 Roles: **${roles}**`
-      )
-    );
-  }
-
-  // ═══════════════════════════════════════
-  // 🛡️ COMANDOS ADMIN
-  // ═══════════════════════════════════════
-
-  const adminCommands = [
-    "mute",
-    "unmute",
-    "kick",
-    "ban",
-    "unban",
-    "permaban",
-    "warn",
-    "purge"
-  ];
-
-  if (adminCommands.includes(command)) {
-
-    if (!isAdmin(message)) {
-      return message.reply(
-        error(
-          "🚫 Necesitas permisos de Administrador."
-        )
-      );
-    }
-
-    // 🔇 MUTE
-    if (command === "mute") {
-      const member =
-        message.mentions.members.first();
-
-      if (!member) {
-        return message.reply(
-          error(
-            "🔇 Menciona al usuario."
-          )
-        );
-      }
-
-      if (!member.moderatable) {
-        return message.reply(
-          error(
-            "❌ No puedo silenciar a ese usuario."
-          )
-        );
-      }
-
-      try {
-        await member.timeout(
-          60 * 60 * 1000,
-          `Mute por ${message.author.tag}`
-        );
-
-        return message.reply(
-          success(
-            `🔇 **${member.user.username}** fue silenciado durante **1 hora**.`
-          )
-        );
-      } catch {
-        return message.reply(
-          error(
-            "❌ No pude silenciar al usuario."
-          )
-        );
-      }
-    }
-
-    // 🔊 UNMUTE
-    if (command === "unmute") {
-      const member =
-        message.mentions.members.first();
-
-      if (!member) {
-        return message.reply(
-          error(
-            "🔊 Menciona al usuario."
-          )
-        );
-      }
-
-      try {
-        await member.timeout(null);
-
-        return message.reply(
-          success(
-            `🔊 Se quitó el silencio a **${member.user.username}**.`
-          )
-        );
-      } catch {
-        return message.reply(
-          error(
-            "❌ No pude quitar el silencio."
-          )
-        );
-      }
-    }
-
-    // 👢 KICK
-    if (command === "kick") {
-      const member =
-        message.mentions.members.first();
-
-      if (!member) {
-        return message.reply(
-          error(
-            "👢 Menciona al usuario."
-          )
-        );
-      }
-
-      if (!member.kickable) {
-        return message.reply(
-          error(
-            "❌ No puedo expulsar a ese usuario."
-          )
-        );
-      }
-
-      try {
-        await member.kick(
-          `Kick por ${message.author.tag}`
-        );
-
-        return message.reply(
-          success(
-            `👢 **${member.user.username}** fue expulsado.`
-          )
-        );
-      } catch {
-        return message.reply(
-          error(
-            "❌ No pude expulsar al usuario."
-          )
-        );
-      }
-    }
-
-    // 🔨 BAN
-    if (
-      command === "ban" ||
-      command === "permaban"
-    ) {
-      const member =
-        message.mentions.members.first();
-
-      if (!member) {
-        return message.reply(
-          error(
-            "🔨 Menciona al usuario."
-          )
-        );
-      }
-
-      if (!member.bannable) {
-        return message.reply(
-          error(
-            "❌ No puedo banear a ese usuario."
-          )
-        );
-      }
-
-      try {
-        await member.ban({
-          reason:
-            `${command} por ${message.author.tag}`
-        });
-
-        return message.reply(
-          success(
-            `🔨 **${member.user.username}** fue baneado.`
-          )
-        );
-      } catch {
-        return message.reply(
-          error(
-            "❌ No pude banear al usuario."
-          )
-        );
-      }
-    }
-
-    // 🔓 UNBAN
-    if (command === "unban") {
-      const id = args[0];
-
-      if (!id) {
-        return message.reply(
-          error(
-            "🔓 Usa: `p.unban ID`"
-          )
-        );
-      }
-
-      try {
-        await message.guild.members.unban(id);
-
-        return message.reply(
-          success(
-            `🔓 Usuario \`${id}\` desbaneado.`
-          )
-        );
-      } catch {
-        return message.reply(
-          error(
-            "❌ No encontré ese usuario en los baneados."
-          )
-        );
-      }
-    }
-
-    // ⚠️ WARN
-    if (command === "warn") {
-      const member =
-        message.mentions.members.first();
-
-      if (!member) {
-        return message.reply(
-          error(
-            "⚠️ Menciona al usuario."
-          )
-        );
-      }
-
-      return message.reply(
-        box(
-          "⚠️ ADVERTENCIA",
-          `┃ 👤 Usuario: **${member.user.username}**
-┃ 👮 Moderador: **${message.author.username}**
-┃
-┃ ⚠️ El usuario recibió una advertencia.`
-        )
-      );
-    }
-
-    // 🧹 PURGE
-    if (command === "purge") {
-      const amount =
-        parseInt(args[0]);
-
-      if (
-        !amount ||
-        amount < 1 ||
-        amount > 99
-      ) {
-        return message.reply(
-          error(
-            "🧹 Usa una cantidad entre **1 y 99**."
-          )
-        );
-      }
-
-      try {
-        const deleted =
-          await message.channel.bulkDelete(
-            amount,
-            true
-          );
-
-        const msg =
-          await message.channel.send(
-            success(
-              `🧹 Eliminé **${deleted.size} mensajes**.`
-            )
-          );
-
-        setTimeout(
-          () =>
-            msg.delete().catch(() => {}),
-          4000
-        );
-
-        return;
-      } catch {
-        return message.reply(
-          error(
-            "❌ No pude borrar los mensajes."
-          )
-        );
-      }
-    }
-  }
-
-  // ═══════════════════════════════════════
-  // ❓ COMANDO DESCONOCIDO
-  // ═══════════════════════════════════════
-
-  return message.reply(
-    `╭━━━〔 ❓ ¿QUÉ? 〕━━━╮
-┃ ❌ No conozco \`${PREFIX}${command}\`.
-┃
-┃ 📖 Usa **p.help**
-┃ para ver todos los comandos.
-╰━━━━━��━━━━━━━━━━━━╯`
-  );
 });
 
-// ═══════════════════════════════════════
-// 🌐 SERVIDOR PARA RENDER
-// ═══════════════════════════════════════
+http.createServer((req, res) => {
+  res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+  res.end("🤖 Joshua está funcionando correctamente.");
+}).listen(PORT, () => console.log(`🌐 Servidor HTTP activo en el puerto ${PORT}`));
 
-http
-  .createServer((req, res) => {
-    res.writeHead(200);
-    res.end(
-      "🤖 Joshua está funcionando correctamente."
-    );
-  })
-  .listen(PORT, () => {
-    console.log(
-      `🌐 Puerto ${PORT} activo.`
-    );
-  });
-
-// ═══════════════════════════════════════
-// 🚀 LOGIN
-// ═══════════════════════════════════════
-
-client.login(TOKEN);
+if (!TOKEN) {
+  console.error("❌ ERROR: No existe DISCORD_TOKEN en las variables de entorno.");
+} else {
+  client.login(TOKEN).catch(err => console.error("❌ No se pudo iniciar sesión:", err.message));
+}
