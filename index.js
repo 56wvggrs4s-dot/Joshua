@@ -7,15 +7,12 @@ const {
   PermissionFlagsBits
 } = require("discord.js");
 
+const OpenAI = require("openai");
 const fs = require("fs");
 const http = require("http");
 
 const PREFIX = "p.";
 const DATA_FILE = "./economy.json";
-
-// =========================
-// CLIENTE
-// =========================
 
 const client = new Client({
   intents: [
@@ -27,383 +24,195 @@ const client = new Client({
   ]
 });
 
-// =========================
-// ECONOMÍA
-// =========================
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
+
+/* =========================
+   DATOS
+========================= */
 
 if (!fs.existsSync(DATA_FILE)) {
-  fs.writeFileSync(DATA_FILE, "{}");
+  fs.writeFileSync(DATA_FILE, JSON.stringify({}, null, 2));
 }
 
-let economy = {};
+let database;
 
 try {
-  economy = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
+  database = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
 } catch {
-  economy = {};
-  fs.writeFileSync(DATA_FILE, "{}");
+  database = {};
 }
 
 function save() {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(economy, null, 2));
+  fs.writeFileSync(DATA_FILE, JSON.stringify(database, null, 2));
 }
 
 function getUser(id) {
-  if (!economy[id] || typeof economy[id] !== "object") {
-    economy[id] = {
-      cash: 1000,
+  if (!database[id]) {
+    database[id] = {
+      cash: 500,
       bank: 0,
-      wins: 0,
-      losses: 0,
-      messages: 0,
       commands: 0,
       daily: 0,
-      work: 0,
-      crime: 0,
-      inventory: {}
+      inventory: {},
+      warnings: 0
     };
 
     save();
   }
 
-  const user = economy[id];
-
-  user.cash = Number(user.cash) || 0;
-  user.bank = Number(user.bank) || 0;
-  user.wins = Number(user.wins) || 0;
-  user.losses = Number(user.losses) || 0;
-  user.messages = Number(user.messages) || 0;
-  user.commands = Number(user.commands) || 0;
-  user.daily = Number(user.daily) || 0;
-  user.work = Number(user.work) || 0;
-  user.crime = Number(user.crime) || 0;
-
-  if (!user.inventory || typeof user.inventory !== "object") {
-    user.inventory = {};
-  }
-
-  return user;
+  return database[id];
 }
 
-// =========================
-// UTILIDADES
-// =========================
-
-function money(value) {
-  return Number(value || 0).toLocaleString("es-ES");
+function money(number) {
+  return Number(number || 0).toLocaleString("es-ES");
 }
 
 function random(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+/* =========================
+   EMBEDS
+========================= */
+
+function info(text) {
+  return new EmbedBuilder()
+    .setColor("Blue")
+    .setDescription(text)
+    .setTimestamp();
+}
+
 function ok(text) {
   return new EmbedBuilder()
-    .setColor(0x57F287)
-    .setTitle("✅ Joshua")
-    .setDescription(text)
+    .setColor("Green")
+    .setDescription(`✅ ${text}`)
     .setTimestamp();
 }
 
 function fail(text) {
   return new EmbedBuilder()
-    .setColor(0xED4245)
-    .setTitle("❌ Joshua")
-    .setDescription(text)
+    .setColor("Red")
+    .setDescription(`❌ ${text}`)
     .setTimestamp();
 }
 
-function info(text) {
+function help() {
   return new EmbedBuilder()
-    .setColor(0x5865F2)
-    .setTitle("🤖 Joshua")
-    .setDescription(text)
-    .setTimestamp();
-}
-
-function isAdmin(message) {
-  return message.member &&
-    message.member.permissions.has(PermissionFlagsBits.Administrator);
-}
-
-// =========================
-// COOLDOWNS
-// =========================
-
-const cooldowns = new Map();
-
-function cooldown(userId, command, seconds) {
-  const key = `${userId}:${command}`;
-  const now = Date.now();
-  const last = cooldowns.get(key) || 0;
-  const remaining = seconds * 1000 - (now - last);
-
-  if (remaining > 0) {
-    return remaining;
-  }
-
-  cooldowns.set(key, now);
-  return 0;
-}
-
-function left(ms) {
-  const seconds = Math.ceil(ms / 1000);
-
-  if (seconds >= 3600) {
-    return `${Math.floor(seconds / 3600)}h`;
-  }
-
-  if (seconds >= 60) {
-    return `${Math.floor(seconds / 60)}m`;
-  }
-
-  return `${seconds}s`;
-}
-
-// =========================
-// AYUDA
-// =========================
-
-function help(category = "main") {
-  const categories = {
-    main: {
-      title: "📚 Centro de ayuda de Joshua",
-      text:
-        "Selecciona una categoría para ver los comandos.\n\n" +
-        "💰 Economía\n" +
-        "🛒 Tienda\n" +
-        "👤 Perfil\n" +
-        "🎮 Diversión\n" +
-        "👥 Social\n" +
-        "🏰 Servidor\n" +
-        "⚙️ Utilidades\n" +
-        "🛡️ Administración"
-    },
-
-    economy: {
-      title: "💰 Economía",
-      text:
-        "**p.balance** — Ver tu dinero\n" +
-        "**p.bank** — Ver banco y efectivo\n" +
-        "**p.daily** — Recompensa diaria\n" +
-        "**p.work** — Trabajar\n" +
-        "**p.crimen** — Crimen ficticio del juego\n" +
-        "**p.dep cantidad** — Depositar\n" +
-        "**p.with cantidad** — Retirar\n" +
-        "**p.pay @usuario cantidad** — Enviar dinero\n" +
-        "**p.gift @usuario cantidad** — Regalar dinero"
-    },
-
-    shop: {
-      title: "🛒 Tienda",
-      text:
-        "**p.shop** — Ver la tienda\n" +
-        "**p.buy objeto cantidad** — Comprar\n" +
-        "**p.inventory** — Ver inventario\n" +
-        "**p.sell objeto cantidad** — Vender"
-    },
-
-    profile: {
-      title: "👤 Perfil",
-      text:
-        "**p.profile** — Ver perfil\n" +
-        "**p.stats** — Ver estadísticas\n" +
-        "**p.userinfo @usuario** — Información de usuario"
-    },
-
-    fun: {
-      title: "🎮 Diversión",
-      text:
-        "**p.coinflip** — Lanzar moneda\n" +
-        "**p.dado** — Tirar dado\n" +
-        "**p.random 1 100** — Número aleatorio\n" +
-        "**p.choose uno dos** — Joshua elige\n" +
-        "**p.8ball pregunta** — Bola mágica\n" +
-        "**p.rps** — Piedra, papel o tijera\n" +
-        "**p.joke** — Chiste"
-    },
-
-    social: {
-      title: "👥 Social",
-      text:
-        "**p.highfive @usuario** — Chocar los cinco\n" +
-        "**p.compliment @usuario** — Elogiar\n" +
-        "**p.say texto** — Joshua dice algo\n" +
-        "**p.whois @usuario** — Información"
-    },
-
-    server: {
-      title: "🏰 Servidor",
-      text:
-        "**p.serverinfo** — Información del servidor\n" +
-        "**p.channels** — Canales\n" +
-        "**p.roles** — Roles\n" +
-        "**p.emojis** �� Emojis\n" +
-        "**p.boosts** — Boosts"
-    },
-
-    utility: {
-      title: "⚙️ Utilidades",
-      text:
-        "**p.ping** — Ver ping\n" +
-        "**p.created @usuario** — Fecha de creación\n" +
-        "**p.help** — Menú de ayuda"
-    },
-
-    admin: {
-      title: "🛡️ Administración",
-      text:
-        "**p.ban @usuario** — Banear\n" +
-        "**p.unban ID** — Desbanear\n" +
-        "**p.kick @usuario** — Expulsar\n" +
-        "**p.mute @usuario** — Silenciar\n" +
-        "**p.unmute @usuario** — Quitar silencio\n" +
-        "**p.warn @usuario motivo** — Advertir\n" +
-        "**p.purge cantidad** — Borrar mensajes\n" +
-        "**p.lock** — Bloquear canal\n" +
-        "**p.unlock** — Desbloquear canal\n" +
-        "**p.slowmode segundos** — Slowmode\n" +
-        "**p.nick @usuario nombre** — Cambiar apodo"
-    }
-  };
-
-  const data = categories[category] || categories.main;
-
-  return new EmbedBuilder()
-    .setColor(0x5865F2)
-    .setTitle(data.title)
-    .setDescription(data.text)
-    .setFooter({ text: "Joshua 🤖 • p.help" })
-    .setTimestamp();
+    .setColor("Purple")
+    .setTitle("🤖 Joshua — Ayuda")
+    .setDescription(
+      [
+        "Usa el prefijo `p.`",
+        "",
+        "🤖 **IA**",
+        "`p.r <pregunta>` — Pregúntale a Joshua AI",
+        "",
+        "💰 **Economía**",
+        "`p.balance` · `p.bank` · `p.daily`",
+        "`p.work` · `p.crimen` · `p.dep`",
+        "`p.with` · `p.pay` · `p.profile`",
+        "",
+        "🛒 **Tienda**",
+        "`p.shop` · `p.buy` · `p.inv` · `p.sell`",
+        "",
+        "🎮 **Diversión**",
+        "`p.coinflip` · `p.dado` · `p.random`",
+        "`p.choose` · `p.8ball` · `p.joke` · `p.rps`",
+        "",
+        "👥 **Social**",
+        "`p.highfive` · `p.compliment` · `p.say`",
+        "`p.userinfo`",
+        "",
+        "🏠 **Servidor**",
+        "`p.serverinfo` · `p.channels` · `p.roles`",
+        "`p.emojis` · `p.boosts`",
+        "",
+        "🛡️ **Moderación**",
+        "`p.ban` · `p.unban` · `p.kick` · `p.warn`",
+        "`p.purge` · `p.lock` · `p.unlock`",
+        "`p.slowmode` · `p.nick` · `p.mute` · `p.unmute`"
+      ].join("\n")
+    )
+    .setFooter({ text: "Joshua 🤖" });
 }
 
 function helpMenu() {
   return new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
-      .setCustomId("joshua_help")
-      .setPlaceholder("📚 Selecciona una categoría")
+      .setCustomId("help_menu")
+      .setPlaceholder("📚 Elige una categoría")
       .addOptions([
         {
-          label: "Economía",
-          value: "economy",
-          emoji: "💰"
+          label: "🤖 IA",
+          value: "ia"
         },
         {
-          label: "Tienda",
-          value: "shop",
-          emoji: "🛒"
+          label: "💰 Economía",
+          value: "economy"
         },
         {
-          label: "Perfil",
-          value: "profile",
-          emoji: "👤"
+          label: "🎮 Diversión",
+          value: "fun"
         },
         {
-          label: "Diversión",
-          value: "fun",
-          emoji: "🎮"
+          label: "👥 Social",
+          value: "social"
         },
         {
-          label: "Social",
-          value: "social",
-          emoji: "👥"
-        },
-        {
-          label: "Servidor",
-          value: "server",
-          emoji: "🏰"
-        },
-        {
-          label: "Utilidades",
-          value: "utility",
-          emoji: "⚙️"
-        },
-        {
-          label: "Administración",
-          value: "admin",
-          emoji: "🛡️"
+          label: "🛡️ Moderación",
+          value: "mod"
         }
       ])
   );
 }
 
-// =========================
-// TIENDA
-// =========================
+/* =========================
+   EVENTO READY
+========================= */
 
-const shopItems = {
-  cookie: {
-    name: "🍪 Galleta",
-    price: 100
-  },
-  pizza: {
-    name: "🍕 Pizza",
-    price: 500
-  },
-  diamond: {
-    name: "💎 Diamante",
-    price: 2500
-  },
-  crown: {
-    name: "👑 Corona",
-    price: 5000
-  }
-};
+client.once("ready", () => {
+  console.log(`🤖 Joshua conectado como ${client.user.tag}`);
+  console.log(`🟢 Servidores: ${client.guilds.cache.size}`);
 
-// =========================
-// MENSAJES
-// =========================
+  client.user.setPresence({
+    activities: [
+      {
+        name: "p.help | IA 🤖",
+        type: 0
+      }
+    ],
+    status: "online"
+  });
+});
+
+/* =========================
+   MENSAJES
+========================= */
 
 client.on("messageCreate", async message => {
-  if (message.author.bot || !message.guild) return;
+  if (message.author.bot) return;
+  if (!message.guild) return;
+  if (!message.content.startsWith(PREFIX)) return;
+
+  const content = message.content.slice(PREFIX.length).trim();
+
+  if (!content) return;
+
+  const parts = content.split(/\s+/);
+  const command = parts.shift().toLowerCase();
+  const args = parts;
 
   const user = getUser(message.author.id);
-
-  user.messages++;
-  save();
-
-  const content = message.content.toLowerCase();
-
-  if (!content.startsWith(PREFIX)) {
-    if (content.includes("hola joshua")) {
-      return message.reply("👋 ¡Holaaa! Soy Joshua 🤖🔥");
-    }
-
-    if (content === "buenas") {
-      return message.reply("😎 ¡Buenas! ¿Qué tal?");
-    }
-
-    if (content.includes("te quiero joshua")) {
-      return message.react("❤️").catch(() => {});
-    }
-
-    if (
-      content.includes("joshua god") ||
-      content.includes("joshua goat")
-    ) {
-      return message.react("🔥").catch(() => {});
-    }
-
-    return;
-  }
-
-  const args = message.content
-    .slice(PREFIX.length)
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
-
-  const command = (args.shift() || "").toLowerCase();
-
-  if (!command) return;
 
   user.commands++;
   save();
 
-  const reply = payload => {
-    if (typeof payload === "string") {
+  const reply = content => {
+    if (typeof content === "string") {
       return message.reply({
-        content: payload,
+        content,
         allowedMentions: {
           repliedUser: false
         }
@@ -411,37 +220,84 @@ client.on("messageCreate", async message => {
     }
 
     return message.reply({
-      ...payload,
+      ...content,
       allowedMentions: {
         repliedUser: false
       }
     });
   };
 
-  // =========================
-  // GENERALES
-  // =========================
+  /* =========================
+     🤖 IA
+  ========================= */
 
-  if (command === "help") {
+  if (command === "r" || command === "chatgpt") {
+    const pregunta = args.join(" ");
+
+    if (!pregunta) {
+      return reply(
+        "🤖💭 Escribe una pregunta.\n\nEjemplo:\n`p.r ¿Qué es un agujero negro?`"
+      );
+    }
+
+    try {
+      await message.channel.sendTyping();
+
+      const respuesta = await openai.responses.create({
+        model: "gpt-5-mini",
+        input: pregunta
+      });
+
+      const texto = respuesta.output_text || "No pude generar una respuesta.";
+
+      if (texto.length <= 1900) {
+        return reply(`🤖 **Joshua AI**\n\n${texto}`);
+      }
+
+      const partesRespuesta = texto.match(/[\s\S]{1,1900}/g);
+
+      for (let i = 0; i < partesRespuesta.length; i++) {
+        await message.channel.send(
+          `🤖 **Joshua AI**\n\n${partesRespuesta[i]}`
+        );
+      }
+
+      return;
+    } catch (error) {
+      console.error("❌ Error de OpenAI:", error);
+
+      return reply(
+        "❌ Joshua AI tuvo un problema al responder. Inténtalo otra vez."
+      );
+    }
+  }
+
+  /* =========================
+     📚 HELP
+  ========================= */
+
+  if (command === "help" || command === "ayuda") {
     return reply({
       embeds: [help()],
       components: [helpMenu()]
     });
   }
 
+  /* =========================
+     🏓 PING
+  ========================= */
+
   if (command === "ping") {
     return reply({
       embeds: [
-        info(
-          `🏓 Ping: **${client.ws.ping}ms**\n🟢 Joshua está conectado.`
-        )
+        info(`🏓 Ping: **${client.ws.ping}ms**\n🟢 Joshua está conectado.`)
       ]
     });
   }
 
-  // =========================
-  // ECONOMÍA
-  // =========================
+  /* =========================
+     💰 ECONOMÍA
+  ========================= */
 
   if (command === "balance" || command === "bal") {
     return reply({
@@ -467,243 +323,213 @@ client.on("messageCreate", async message => {
     });
   }
 
-  if (
-    command === "daily" ||
-    command === "work" ||
-    command === "crimen"
-  ) {
-    const times = {
-      daily: 86400,
-      work: 30,
-      crimen: 120
-    };
+  if (command === "daily") {
+    const now = Date.now();
+    const cooldown = 24 * 60 * 60 * 1000;
 
-    const cd = cooldown(
-      message.author.id,
-      command,
-      times[command]
-    );
+    if (user.daily && now - user.daily < cooldown) {
+      const remaining = cooldown - (now - user.daily);
+      const hours = Math.ceil(remaining / (60 * 60 * 1000));
 
-    if (cd) {
-      return reply({
-        embeds: [
-          fail(
-            `⏰ Espera **${left(cd)}** para volver a usarlo.`
-          )
-        ]
-      });
+      return reply(
+        `⏳ Ya reclamaste tu recompensa diaria.\n` +
+        `Vuelve en aproximadamente **${hours} hora(s)**.`
+      );
     }
 
-    if (command === "daily") {
-      user.cash += 1000;
-      user.wins++;
-      user.daily++;
-      save();
+    const reward = random(500, 1500);
 
-      return reply({
-        embeds: [
-          ok("🎁 Recibiste **1.000 🪙** por tu recompensa diaria.")
-        ]
-      });
-    }
-
-    if (command === "work") {
-      const amount = random(10, 150);
-
-      user.cash += amount;
-      user.wins++;
-      user.work++;
-      save();
-
-      return reply({
-        embeds: [
-          ok(
-            `💼 Trabajaste y ganaste **${money(amount)} 🪙**.`
-          )
-        ]
-      });
-    }
-
-    if (Math.random() < 0.2) {
-      const amount = random(300, 500);
-
-      user.cash += amount;
-      user.wins++;
-      user.crime++;
-      save();
-
-      return reply({
-        embeds: [
-          ok(
-            `🕵️ Crimen ficticio exitoso: ganaste **${money(
-              amount
-            )} 🪙**.`
-          )
-        ]
-      });
-    }
-
-    const amount = Math.min(
-      user.cash,
-      random(200, 600)
-    );
-
-    user.cash -= amount;
-    user.losses++;
-    user.crime++;
-    save();
-
-    return reply({
-      embeds: [
-        fail(
-          `🚔 Crimen ficticio fallido: perdiste **${money(
-            amount
-          )} 🪙**.`
-        )
-      ]
-    });
-  }
-
-  // =========================
-  // BANCO
-  // =========================
-
-  if (
-    command === "dep" ||
-    command === "deposit" ||
-    command === "with" ||
-    command === "withdraw"
-  ) {
-    const withdraw =
-      command === "with" ||
-      command === "withdraw";
-
-    const arg = (args[0] || "").toLowerCase();
-
-    const amount =
-      arg === "all"
-        ? withdraw
-          ? user.bank
-          : user.cash
-        : Number(arg);
-
-    const source = withdraw
-      ? user.bank
-      : user.cash;
-
-    if (
-      !Number.isSafeInteger(amount) ||
-      amount <= 0
-    ) {
-      return reply({
-        embeds: [
-          fail(
-            `Usa \`p.${command} cantidad\` o \`p.${command} all\`.`
-          )
-        ]
-      });
-    }
-
-    if (amount > source) {
-      return reply({
-        embeds: [
-          fail("💸 No tienes fondos suficientes.")
-        ]
-      });
-    }
-
-    if (withdraw) {
-      user.bank -= amount;
-      user.cash += amount;
-    } else {
-      user.cash -= amount;
-      user.bank += amount;
-    }
+    user.cash += reward;
+    user.daily = now;
 
     save();
 
     return reply({
       embeds: [
         ok(
-          `${withdraw ? "📤 Retiraste" : "📥 Depositaste"} **${money(
-            amount
+          `🎁 Recibiste **${money(reward)} 🪙**.\n` +
+          `💵 Ahora tienes **${money(user.cash)} 🪙**.`
+        )
+      ]
+    });
+  }
+
+  if (command === "work") {
+    const jobs = [
+      "💻 Programaste un pequeño proyecto.",
+      "🍕 Trabajaste repartiendo pizzas.",
+      "🎮 Probaste videojuegos durante tu turno.",
+      "📦 Organizaste unas cajas.",
+      "🐶 Paseaste algunos perros."
+    ];
+
+    const reward = random(100, 500);
+    const job = jobs[random(0, jobs.length - 1)];
+
+    user.cash += reward;
+
+    save();
+
+    return reply({
+      embeds: [
+        ok(`${job}\n\n💰 Ganaste **${money(reward)} 🪙**.`)
+      ]
+    });
+  }
+
+  if (command === "crimen") {
+    const outcomes = [
+      ["😎 Salió perfecto.", 300],
+      ["🚨 Casi te atrapan, pero escapaste.", 150],
+      ["😂 El plan fue un desastre.", -100],
+      ["🕶️ Joshua dice que nadie vio nada.", 250]
+    ];
+
+    const result = outcomes[random(0, outcomes.length - 1)];
+
+    user.cash = Math.max(0, user.cash + result[1]);
+
+    save();
+
+    return reply({
+      embeds: [
+        info(
+          `🎭 **Crimen ficticio**\n\n${result[0]}\n` +
+          `${result[1] >= 0 ? "💰 Ganaste" : "💸 Perdiste"} **${money(
+            Math.abs(result[1])
           )} 🪙**.`
         )
       ]
     });
   }
 
-  // =========================
-  // PAY / GIFT
-  // =========================
+  if (command === "dep" || command === "deposit") {
+    if (!args[0]) {
+      return reply("🏦 Usa `p.dep <cantidad>` o `p.dep all`.");
+    }
+
+    let amount;
+
+    if (args[0].toLowerCase() === "all") {
+      amount = user.cash;
+    } else {
+      amount = Number(args[0]);
+    }
+
+    if (!Number.isSafeInteger(amount) || amount <= 0) {
+      return reply("❌ Cantidad inválida.");
+    }
+
+    if (amount > user.cash) {
+      return reply("❌ No tienes suficiente dinero en efectivo.");
+    }
+
+    user.cash -= amount;
+    user.bank += amount;
+
+    save();
+
+    return reply({
+      embeds: [
+        ok(`🏦 Depositaste **${money(amount)} 🪙**.`)
+      ]
+    });
+  }
+
+  if (command === "with" || command === "withdraw") {
+    if (!args[0]) {
+      return reply("🏦 Usa `p.with <cantidad>` o `p.with all`.");
+    }
+
+    let amount;
+
+    if (args[0].toLowerCase() === "all") {
+      amount = user.bank;
+    } else {
+      amount = Number(args[0]);
+    }
+
+    if (!Number.isSafeInteger(amount) || amount <= 0) {
+      return reply("❌ Cantidad inválida.");
+    }
+
+    if (amount > user.bank) {
+      return reply("❌ No tienes suficiente dinero en el banco.");
+    }
+
+    user.bank -= amount;
+    user.cash += amount;
+
+    save();
+
+    return reply({
+      embeds: [
+        ok(`💵 Retiraste **${money(amount)} 🪙**.`)
+      ]
+    });
+  }
 
   if (command === "pay" || command === "gift") {
     const target = message.mentions.users.first();
+    const amount = Number(args[1]);
 
-    const amount = Number(
-      args.find(x => /^\d+$/.test(x))
-    );
-
-    if (
-      !target ||
-      target.id === message.author.id ||
-      target.bot ||
-      !Number.isSafeInteger(amount) ||
-      amount <= 0
-    ) {
-      return reply({
-        embeds: [
-          fail(
-            `Uso: \`p.${command} @usuario cantidad\``
-          )
-        ]
-      });
+    if (!target) {
+      return reply("💸 Menciona a la persona que recibirá el dinero.");
     }
 
-    if (user.cash < amount) {
-      return reply({
-        embeds: [
-          fail("💸 No tienes suficiente efectivo.")
-        ]
-      });
+    if (target.bot) {
+      return reply("🤖 No puedes enviar dinero a un bot.");
     }
 
-    const targetUser = getUser(target.id);
+    if (!Number.isSafeInteger(amount) || amount <= 0) {
+      return reply("💰 Escribe una cantidad válida.");
+    }
+
+    if (amount > user.cash) {
+      return reply("❌ No tienes suficiente dinero.");
+    }
+
+    const receiver = getUser(target.id);
 
     user.cash -= amount;
-    targetUser.cash += amount;
+    receiver.cash += amount;
 
     save();
 
     return reply({
       embeds: [
         ok(
-          `🎁 Enviaste **${money(amount)} 🪙** a ${target}.`
+          `💸 Enviaste **${money(amount)} 🪙** a ${target}.\n` +
+          `💰 Tu efectivo: **${money(user.cash)} 🪙**`
         )
       ]
     });
   }
 
-  // =========================
-  // PERFIL
-  // =========================
-
-  if (command === "profile") {
+  if (command === "profile" || command === "perfil") {
     return reply({
       embeds: [
         new EmbedBuilder()
-          .setColor(0x5865F2)
+          .setColor("Gold")
           .setTitle(`👤 Perfil de ${message.author.username}`)
           .setThumbnail(message.author.displayAvatarURL())
-          .setDescription(
-            `💵 Efectivo: **${money(user.cash)} 🪙**\n` +
-            `🏦 Banco: **${money(user.bank)} 🪙**\n` +
-            `🏆 Victorias: **${user.wins}**\n` +
-            `💔 Derrotas: **${user.losses}**\n` +
-            `💬 Mensajes: **${user.messages}**\n` +
-            `⚙️ Comandos: **${user.commands}**`
+          .addFields(
+            {
+              name: "💵 Efectivo",
+              value: `${money(user.cash)} 🪙`,
+              inline: true
+            },
+            {
+              name: "🏦 Banco",
+              value: `${money(user.bank)} 🪙`,
+              inline: true
+            },
+            {
+              name: "📨 Comandos",
+              value: `${money(user.commands)}`,
+              inline: true
+            }
           )
-          .setTimestamp()
       ]
     });
   }
@@ -712,88 +538,83 @@ client.on("messageCreate", async message => {
     return reply({
       embeds: [
         info(
-          `📊 **Estadísticas**\n\n` +
-          `🎁 Daily: **${user.daily}**\n` +
-          `💼 Trabajo: **${user.work}**\n` +
-          `🕵️ Crimen ficticio: **${user.crime}**\n` +
-          `🏆 Victorias: **${user.wins}**\n` +
-          `💔 Derrotas: **${user.losses}**`
+          `📊 **Estadísticas de Joshua**\n\n` +
+          `👥 Servidores: **${client.guilds.cache.size}**\n` +
+          `👤 Usuarios visibles: **${client.users.cache.size}**\n` +
+          `🏓 Ping: **${client.ws.ping}ms**`
         )
       ]
     });
   }
 
-  // =========================
-  // TIENDA
-  // =========================
+  /* =========================
+     🛒 TIENDA
+  ========================= */
 
   if (command === "shop") {
-    let text = "";
-
-    for (const [id, item] of Object.entries(shopItems)) {
-      text +=
-        `**${id}** — ${item.name} — **${money(
-          item.price
-        )} 🪙**\n`;
-    }
-
     return reply({
       embeds: [
         new EmbedBuilder()
-          .setColor(0xFEE75C)
+          .setColor("Orange")
           .setTitle("🛒 Tienda de Joshua")
-          .setDescription(text)
-          .setFooter({
-            text: "Usa p.buy objeto cantidad"
-          })
+          .setDescription(
+            "🎩 Sombrero — **500 🪙**\n" +
+            "💎 Diamante — **1.000 🪙**\n" +
+            "🎮 Consola — **2.500 🪙**\n" +
+            "👑 Corona — **5.000 🪙**\n\n" +
+            "Compra con `p.buy <objeto>`."
+          )
       ]
     });
   }
 
   if (command === "buy") {
-    const itemId = (args[0] || "").toLowerCase();
-    const quantity = Math.max(
-      1,
-      Number(args[1]) || 1
-    );
+    const item = args[0]?.toLowerCase();
 
-    const item = shopItems[itemId];
+    const items = {
+      sombrero: {
+        name: "🎩 Sombrero",
+        price: 500
+      },
+      diamante: {
+        name: "💎 Diamante",
+        price: 1000
+      },
+      consola: {
+        name: "🎮 Consola",
+        price: 2500
+      },
+      corona: {
+        name: "👑 Corona",
+        price: 5000
+      }
+    };
 
-    if (!item) {
-      return reply({
-        embeds: [
-          fail(
-            "❌ Ese objeto no existe. Usa `p.shop`."
-          )
-        ]
-      });
+    if (!item || !items[item]) {
+      return reply("❌ Ese objeto no existe. Usa `p.shop`.");
     }
 
-    const total = item.price * quantity;
+    const product = items[item];
 
-    if (user.cash < total) {
-      return reply({
-        embeds: [
-          fail("💸 No tienes suficiente dinero.")
-        ]
-      });
+    if (user.cash < product.price) {
+      return reply("❌ No tienes suficiente dinero.");
     }
 
-    user.cash -= total;
+    user.cash -= product.price;
 
-    if (!user.inventory[itemId]) {
-      user.inventory[itemId] = 0;
+    if (!user.inventory[item]) {
+      user.inventory[item] = 0;
     }
 
-    user.inventory[itemId] += quantity;
+    user.inventory[item]++;
 
     save();
 
     return reply({
       embeds: [
         ok(
-          `🛒 Compraste **${quantity}x ${item.name}** por **${money(
-            total
+          `🛒 Compraste **${product.name}** por **${money(
+            product.price
           )} 🪙**.`
         )
       ]
@@ -801,139 +622,103 @@ client.on("messageCreate", async message => {
   }
 
   if (command === "inventory" || command === "inv") {
-    const entries = Object.entries(user.inventory)
-      .filter(([, amount]) => amount > 0);
+    const entries = Object.entries(user.inventory);
 
     if (!entries.length) {
-      return reply({
-        embeds: [
-          info("🎒 Tu inventario está vacío.")
-        ]
-      });
+      return reply("🎒 Tu inventario está vacío.");
     }
 
-    let text = "";
-
-    for (const [id, amount] of entries) {
-      text +=
-        `${shopItems[id]?.name || id}: **${amount}**\n`;
-    }
+    const text = entries
+      .map(([item, amount]) => `📦 **${item}** × ${amount}`)
+      .join("\n");
 
     return reply({
       embeds: [
-        info(`🎒 **Tu inventario**\n\n${text}`)
+        info(`🎒 **Inventario**\n\n${text}`)
       ]
     });
   }
 
   if (command === "sell") {
-    const itemId = (args[0] || "").toLowerCase();
-    const quantity = Math.max(
-      1,
-      Number(args[1]) || 1
-    );
+    const item = args[0]?.toLowerCase();
 
-    const item = shopItems[itemId];
-
-    if (!item) {
-      return reply({
-        embeds: [
-          fail("❌ Ese objeto no existe.")
-        ]
-      });
+    if (!item || !user.inventory[item] || user.inventory[item] <= 0) {
+      return reply("❌ No tienes ese objeto.");
     }
 
-    if ((user.inventory[itemId] || 0) < quantity) {
-      return reply({
-        embeds: [
-          fail("🎒 No tienes suficientes unidades.")
-        ]
-      });
+    const prices = {
+      sombrero: 250,
+      diamante: 500,
+      consola: 1250,
+      corona: 2500
+    };
+
+    if (!prices[item]) {
+      return reply("❌ Ese objeto no se puede vender.");
     }
 
-    const total = Math.floor(
-      (item.price * quantity) / 2
-    );
-
-    user.inventory[itemId] -= quantity;
-    user.cash += total;
+    user.inventory[item]--;
+    user.cash += prices[item];
 
     save();
 
     return reply({
       embeds: [
         ok(
-          `💰 Vendiste **${quantity}x ${item.name}** y recibiste **${money(
-            total
+          `💰 Vendiste **${item}** por **${money(
+            prices[item]
           )} 🪙**.`
         )
       ]
     });
   }
 
-  // =========================
-  // DIVERSIÓN
-  // =========================
+  /* =========================
+     🎮 DIVERSIÓN
+  ========================= */
 
-  if (command === "coinflip") {
-    const result =
-      Math.random() < 0.5
-        ? "🪙 Cara"
-        : "🪙 Cruz";
+  if (command === "coinflip" || command === "moneda") {
+    const result = Math.random() < 0.5 ? "🪙 Cara" : "🪙 Cruz";
 
     return reply({
       embeds: [
-        info(`🪙 Salió **${result}**.`)
+        info(`🪙 La moneda cayó en **${result}**.`)
       ]
     });
   }
 
-  if (command === "dado") {
+  if (command === "dado" || command === "dice") {
+    const result = random(1, 6);
+
     return reply({
       embeds: [
-        info(
-          `🎲 Tiraste el dado y salió **${random(1, 6)}**.`
-        )
+        info(`🎲 Sacaste un **${result}**.`)
       ]
     });
   }
 
   if (command === "random") {
-    const min = Number(args[0]) || 1;
-    const max = Number(args[1]) || 100;
+    const max = Number(args[0]);
 
-    if (
-      !Number.isFinite(min) ||
-      !Number.isFinite(max) ||
-      min >= max
-    ) {
-      return reply({
-        embeds: [
-          fail("Usa `p.random 1 100`.")
-        ]
-      });
+    if (!Number.isSafeInteger(max) || max < 1) {
+      return reply("🎲 Usa `p.random <número>`.");
     }
 
     return reply({
       embeds: [
-        info(
-          `🎲 Número aleatorio:\n\n# ${random(min, max)}`
-        )
+        info(`🎲 Número aleatorio: **${random(1, max)}**`)
       ]
     });
   }
 
-  if (command === "choose") {
+  if (command === "choose" || command === "elegir") {
     if (args.length < 2) {
-      return reply({
-        embeds: [
-          fail("Usa `p.choose opción1 opción2`.")
-        ]
-      });
+      return reply(
+        "🤔 Dame varias opciones.\nEjemplo: `p.choose pizza hamburguesa`"
+      );
     }
 
-    const choice =
-      args[Math.floor(Math.random() * args.length)];
+    const choice = args[random(0, args.length - 1)];
 
     return reply({
       embeds: [
@@ -944,242 +729,177 @@ client.on("messageCreate", async message => {
 
   if (command === "8ball") {
     const answers = [
-      "🟢 Sí.",
-      "🔴 No.",
-      "🤔 Tal vez.",
-      "✨ Probablemente.",
-      "😶 No estoy seguro.",
-      "🔥 Definitivamente."
+      "🎱 Sí, definitivamente.",
+      "🎱 Probablemente.",
+      "🎱 No parece probable.",
+      "🎱 Las señales no son claras.",
+      "🎱 Pregunta de nuevo."
     ];
 
     return reply({
       embeds: [
-        info(
-          `🎱 ${answers[Math.floor(Math.random() * answers.length)]}`
-        )
+        info(answers[random(0, answers.length - 1)])
       ]
     });
   }
 
-  if (command === "joke") {
+  if (command === "joke" || command === "chiste") {
     const jokes = [
       "😂 ¿Qué hace una abeja en el gimnasio? ¡Zum-ba!",
-      "🤣 ¿Qué le dijo un cero a un ocho? Bonito cinturón.",
-      "😎 ¿Por qué el libro fue al médico? Porque tenía muchas páginas en blanco."
+      "🤣 ¿Qué le dijo un pez a otro? ¡Nada!",
+      "😎 ¿Cuál es el colmo de un electricista? No encontrar su corriente."
     ];
 
     return reply({
       embeds: [
-        info(
-          jokes[Math.floor(Math.random() * jokes.length)]
-        )
+        info(jokes[random(0, jokes.length - 1)])
       ]
     });
   }
 
   if (command === "rps") {
-    const choices = [
-      "🪨 Piedra",
-      "📄 Papel",
-      "✂️ Tijera"
-    ];
+    const choices = ["🪨 Piedra", "📄 Papel", "✂️ Tijera"];
 
     return reply({
       embeds: [
         info(
           `🎮 Joshua eligió **${
-            choices[Math.floor(Math.random() * choices.length)]
-          }**.`
+            choices[random(0, choices.length - 1)]
+          }**.\n\nUsa \`p.rps\` para jugar.`
         )
       ]
     });
   }
 
-  // =========================
-  // SOCIAL
-  // =========================
+  /* =========================
+     👥 SOCIAL
+  ========================= */
 
   if (command === "highfive") {
-    const target =
-      message.mentions.users.first();
+    const target = message.mentions.users.first();
 
     if (!target) {
-      return reply({
-        embeds: [
-          fail("Menciona a alguien.")
-        ]
-      });
+      return reply("🙌 Menciona a alguien.");
     }
 
     return reply({
       embeds: [
-        ok(
-          `🙌 ¡${message.author} chocó los cinco con ${target}!`
-        )
+        info(`🙌 ${message.author} chocó los cinco con ${target}.`)
       ]
     });
   }
 
   if (command === "compliment") {
-    const target =
-      message.mentions.users.first();
+    const target = message.mentions.users.first();
 
     if (!target) {
-      return reply({
-        embeds: [
-          fail("Menciona a alguien.")
-        ]
-      });
+      return reply("✨ Menciona a alguien.");
     }
-
-    const compliments = [
-      "✨ ¡Tienes una energía increíble!",
-      "🔥 ¡Eres una máquina!",
-      "😎 ¡Qué grande eres!",
-      "💎 ¡Eres genial!"
-    ];
 
     return reply({
       embeds: [
-        ok(
-          `${target}, ${
-            compliments[
-              Math.floor(Math.random() * compliments.length)
-            ]
-          }`
-        )
+        info(`✨ ${target}, ¡eres genial! 😎`)
       ]
     });
   }
 
   if (command === "say") {
-    if (!args.length) {
-      return reply({
-        embeds: [
-          fail("Escribe algo para que Joshua lo diga.")
-        ]
-      });
+    const text = args.join(" ");
+
+    if (!text) {
+      return reply("💬 Escribe algo para que Joshua lo diga.");
     }
 
-    return reply({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(0x5865F2)
-          .setDescription(args.join(" "))
-          .setFooter({
-            text: "Joshua 🤖"
-          })
-      ]
-    });
+    return reply(text);
   }
 
   if (command === "userinfo" || command === "user") {
-    const target =
-      message.mentions.users.first() ||
-      message.author;
+    const target = message.mentions.users.first() || message.author;
+    const member = message.guild.members.cache.get(target.id);
 
     return reply({
       embeds: [
         new EmbedBuilder()
-          .setColor(0x5865F2)
-          .setTitle(`👤 ${target.username}`)
+          .setColor("Blue")
+          .setTitle(`👤 Información de ${target.username}`)
           .setThumbnail(target.displayAvatarURL())
-          .setDescription(
-            `🆔 ID: **${target.id}**\n` +
-            `🤖 Bot: **${target.bot ? "Sí" : "No"}**\n` +
-            `📅 Cuenta creada: <t:${Math.floor(
-              target.createdTimestamp / 1000
-            )}:F>`
+          .addFields(
+            {
+              name: "🆔 ID",
+              value: target.id
+            },
+            {
+              name: "📅 Cuenta creada",
+              value: `<t:${Math.floor(target.createdTimestamp / 1000)}:R>`
+            },
+            {
+              name: "👑 Apodo",
+              value: member?.nickname || "Ninguno"
+            }
           )
-          .setTimestamp()
       ]
     });
   }
 
-  if (command === "whois") {
-    const target =
-      message.mentions.users.first() ||
-      message.author;
-
-    return reply({
-      embeds: [
-        info(
-          `👤 Usuario: **${target.username}**\n` +
-          `🆔 ID: **${target.id}**`
-        )
-      ]
-    });
-  }
-
-  // =========================
-  // SERVIDOR
-  // =========================
+  /* =========================
+     🏠 SERVIDOR
+  ========================= */
 
   if (command === "serverinfo") {
-    const guild = message.guild;
-
     return reply({
       embeds: [
         new EmbedBuilder()
-          .setColor(0x5865F2)
-          .setTitle(`🏰 ${guild.name}`)
-          .setThumbnail(guild.iconURL())
-          .setDescription(
-            `👥 Miembros: **${guild.memberCount}**\n` +
-            `💬 Canales: **${guild.channels.cache.size}**\n` +
-            `🎭 Roles: **${guild.roles.cache.size}**\n` +
-            `😀 Emojis: **${guild.emojis.cache.size}**\n` +
-            `🚀 Boosts: **${guild.premiumSubscriptionCount || 0}**`
+          .setColor("Green")
+          .setTitle(`🏠 ${message.guild.name}`)
+          .setThumbnail(message.guild.iconURL())
+          .addFields(
+            {
+              name: "👥 Miembros",
+              value: `${message.guild.memberCount}`,
+              inline: true
+            },
+            {
+              name: "💬 Canales",
+              value: `${message.guild.channels.cache.size}`,
+              inline: true
+            },
+            {
+              name: "🎭 Roles",
+              value: `${message.guild.roles.cache.size}`,
+              inline: true
+            }
           )
-          .setTimestamp()
       ]
     });
   }
 
   if (command === "channels") {
-    const channels =
-      message.guild.channels.cache
-        .map(channel => `• ${channel}`)
-        .slice(0, 30)
-        .join("\n");
+    const channels = message.guild.channels.cache;
 
     return reply({
       embeds: [
         info(
-          `💬 **Canales**\n\n${channels || "Ninguno"}`
+          `💬 Canales del servidor: **${channels.size}**`
         )
       ]
     });
   }
 
   if (command === "roles") {
-    const roles =
-      message.guild.roles.cache
-        .filter(role => role.id !== message.guild.id)
-        .map(role => `• ${role}`)
-        .slice(0, 30)
-        .join("\n");
-
     return reply({
       embeds: [
         info(
-          `🎭 **Roles**\n\n${roles || "Ninguno"}`
+          `🎭 Este servidor tiene **${message.guild.roles.cache.size} roles**.`
         )
       ]
     });
   }
 
   if (command === "emojis") {
-    const emojis =
-      message.guild.emojis.cache
-        .map(emoji => `${emoji}`)
-        .slice(0, 50)
-        .join(" ");
-
     return reply({
       embeds: [
         info(
-          `😀 **Emojis**\n\n${emojis || "Ninguno"}`
+          `😀 Emojis del servidor: **${message.guild.emojis.cache.size}**`
         )
       ]
     });
@@ -1189,105 +909,63 @@ client.on("messageCreate", async message => {
     return reply({
       embeds: [
         info(
-          `🚀 Este servidor tiene **${
-            message.guild.premiumSubscriptionCount || 0
-          } boosts**.`
+          `🚀 Boosts del servidor: **${message.guild.premiumSubscriptionCount || 0}**`
         )
       ]
     });
   }
 
   if (command === "created") {
-    const target =
-      message.mentions.users.first() ||
-      message.author;
-
     return reply({
       embeds: [
         info(
-          `📅 La cuenta de **${target.username}** fue creada el:\n` +
-          `<t:${Math.floor(
-            target.createdTimestamp / 1000
-          )}:F>`
+          `📅 Este servidor fue creado el <t:${Math.floor(
+            message.guild.createdTimestamp / 1000
+          )}:F>.`
         )
       ]
     });
   }
 
-  // =========================
-  // ADMIN
-  // =========================
-
-  const adminCommands = [
-    "ban",
-    "unban",
-    "kick",
-    "mute",
-    "unmute",
-    "warn",
-    "purge",
-    "lock",
-    "unlock",
-    "slowmode",
-    "nick"
-  ];
-
-  if (adminCommands.includes(command)) {
-    if (!isAdmin(message)) {
-      return reply({
-        embeds: [
-          fail(
-            "🛡️ Necesitas permisos de administrador."
-          )
-        ]
-      });
-    }
-  }
+  /* =========================
+     🛡️ MODERACIÓN
+  ========================= */
 
   if (command === "ban") {
-    const target =
-      message.mentions.members.first();
+    if (!message.member.permissions.has(PermissionFlagsBits.BanMembers)) {
+      return reply("❌ No tienes permiso para banear.");
+    }
+
+    const target = message.mentions.members.first();
 
     if (!target) {
-      return reply({
-        embeds: [
-          fail("Uso: `p.ban @usuario`.")
-        ]
-      });
+      return reply("🛡️ Menciona al usuario que quieres banear.");
     }
 
     if (!target.bannable) {
-      return reply({
-        embeds: [
-          fail("❌ No puedo banear a ese usuario.")
-        ]
-      });
+      return reply("❌ No puedo banear a ese usuario.");
     }
 
     await target.ban({
-      reason: `Ban ejecutado por ${message.author.tag}`
+      reason: args.slice(1).join(" ") || "Sin razón especificada"
     });
 
     return reply({
       embeds: [
-        ok(
-          `🔨 **Usuario baneado**\n\n` +
-          `👤 Usuario: **${target.user.tag}**\n` +
-          `👮 Moderador: **${message.author.tag}**`
-        )
+        ok(`🔨 **${target.user.tag}** fue baneado del servidor.`)
       ]
     });
   }
 
   if (command === "unban") {
+    if (!message.member.permissions.has(PermissionFlagsBits.BanMembers)) {
+      return reply("❌ No tienes permiso para quitar baneos.");
+    }
+
     const id = args[0];
 
     if (!id) {
-      return reply({
-        embeds: [
-          fail("Uso: `p.unban ID`.")
-        ]
-      });
+      return reply("🆔 Usa `p.unban <ID>`.");
     }
 
     try {
@@ -1295,127 +973,99 @@ client.on("messageCreate", async message => {
 
       return reply({
         embeds: [
-          ok(
-            `🔓 Usuario con ID **${id}** fue desbaneado.`
-          )
+          ok(`🔓 Usuario **${id}** desbaneado.`)
         ]
       });
     } catch {
-      return reply({
-        embeds: [
-          fail(
-            "❌ No encontré un usuario baneado con ese ID."
-          )
-        ]
-      });
+      return reply("❌ No pude quitar el baneo.");
     }
   }
 
   if (command === "kick") {
-    const target =
-      message.mentions.members.first();
+    if (!message.member.permissions.has(PermissionFlagsBits.KickMembers)) {
+      return reply("❌ No tienes permiso para expulsar.");
+    }
+
+    const target = message.mentions.members.first();
 
     if (!target) {
-      return reply({
-        embeds: [
-          fail("Uso: `p.kick @usuario`.")
-        ]
-      });
+      return reply("👢 Menciona al usuario que quieres expulsar.");
     }
 
     if (!target.kickable) {
-      return reply({
-        embeds: [
-          fail("❌ No puedo expulsar a ese usuario.")
-        ]
-      });
+      return reply("❌ No puedo expulsar a ese usuario.");
     }
 
     await target.kick(
-      `Kick ejecutado por ${message.author.tag}`
+      args.slice(1).join(" ") || "Sin razón especificada"
     );
 
     return reply({
       embeds: [
-        ok(
-          `👢 **${target.user.tag}** fue expulsado.`
-        )
+        ok(`👢 **${target.user.tag}** fue expulsado.`)
       ]
     });
   }
 
   if (command === "warn") {
-    const target =
-      message.mentions.users.first();
-
-    if (!target) {
-      return reply({
-        embeds: [
-          fail("Uso: `p.warn @usuario motivo`.")
-        ]
-      });
+    if (!message.member.permissions.has(PermissionFlagsBits.ModerateMembers)) {
+      return reply("❌ No tienes permiso para advertir.");
     }
 
-    const reason =
-      args.slice(1).join(" ") ||
-      "Sin motivo especificado";
+    const target = message.mentions.users.first();
+
+    if (!target) {
+      return reply("⚠️ Menciona al usuario.");
+    }
+
+    const targetData = getUser(target.id);
+
+    targetData.warnings++;
+
+    save();
 
     return reply({
       embeds: [
         new EmbedBuilder()
-          .setColor(0xFEE75C)
+          .setColor("Orange")
           .setTitle("⚠️ Advertencia")
           .setDescription(
-            `👤 Usuario: **${target.tag}**\n` +
-            `👮 Moderador: **${message.author.tag}**\n` +
-            `📝 Motivo: **${reason}**`
+            `${target} recibió una advertencia.\n\n` +
+            `📊 Advertencias: **${targetData.warnings}**`
           )
-          .setTimestamp()
       ]
     });
   }
 
-  if (command === "purge") {
-    const amount = Number(args[0]);
-
-    if (
-      !Number.isInteger(amount) ||
-      amount < 1 ||
-      amount > 100
-    ) {
-      return reply({
-        embeds: [
-          fail(
-            "Usa una cantidad entre **1 y 100**."
-          )
-        ]
-      });
+  if (command === "purge" || command === "clear") {
+    if (!message.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
+      return reply("❌ No tienes permiso para borrar mensajes.");
     }
 
-    const deleted =
-      await message.channel.bulkDelete(
-        amount,
-        true
-      );
+    const amount = Number(args[0]);
 
-    const msg =
-      await message.channel.send({
-        embeds: [
-          ok(
-            `🧹 Se eliminaron **${deleted.size} mensajes**.`
-          )
-        ]
-      });
+    if (!Number.isInteger(amount) || amount < 1 || amount > 100) {
+      return reply("🧹 Usa una cantidad entre **1 y 100**.");
+    }
 
-    setTimeout(
-      () => msg.delete().catch(() => {}),
-      5000
+    const deleted = await message.channel.bulkDelete(amount, true);
+
+    const confirmation = await message.channel.send(
+      `🧹 Se eliminaron **${deleted.size} mensajes**.`
     );
+
+    setTimeout(() => {
+      confirmation.delete().catch(() => {});
+    }, 3000);
 
     return;
   }
 
   if (command === "lock") {
+    if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
+      return reply("❌ No tienes permiso para bloquear el canal.");
+    }
+
     await message.channel.permissionOverwrites.edit(
       message.guild.roles.everyone,
       {
@@ -1425,12 +1075,16 @@ client.on("messageCreate", async message => {
 
     return reply({
       embeds: [
-        ok("🔒 Canal bloqueado correctamente.")
+        ok("🔒 Canal bloqueado.")
       ]
     });
   }
 
   if (command === "unlock") {
+    if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
+      return reply("❌ No tienes permiso para desbloquear el canal.");
+    }
+
     await message.channel.permissionOverwrites.edit(
       message.guild.roles.everyone,
       {
@@ -1440,202 +1094,181 @@ client.on("messageCreate", async message => {
 
     return reply({
       embeds: [
-        ok("🔓 Canal desbloqueado correctamente.")
+        ok("🔓 Canal desbloqueado.")
       ]
     });
   }
 
   if (command === "slowmode") {
-    const seconds = Number(args[0]);
-
-    if (
-      !Number.isInteger(seconds) ||
-      seconds < 0 ||
-      seconds > 21600
-    ) {
-      return reply({
-        embeds: [
-          fail(
-            "Usa un número entre **0 y 21600 segundos**."
-          )
-        ]
-      });
+    if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
+      return reply("❌ No tienes permiso para cambiar el slowmode.");
     }
 
-    await message.channel.setRateLimitPerUser(
-      seconds
-    );
+    const seconds = Number(args[0]);
+
+    if (!Number.isInteger(seconds) || seconds < 0 || seconds > 21600) {
+      return reply("⏱️ Usa un valor entre 0 y 21600 segundos.");
+    }
+
+    await message.channel.setRateLimitPerUser(seconds);
 
     return reply({
       embeds: [
-        ok(
-          `🐌 Slowmode establecido en **${seconds} segundos**.`
-        )
+        ok(`⏱️ Slowmode establecido en **${seconds} segundos**.`)
       ]
     });
   }
 
   if (command === "nick") {
-    const target =
-      message.mentions.members.first();
-
-    const nickname =
-      args
-        .filter(arg => !arg.startsWith("<@"))
-        .join(" ");
-
-    if (!target || !nickname) {
-      return reply({
-        embeds: [
-          fail(
-            "Uso: `p.nick @usuario nuevo-nombre`."
-          )
-        ]
-      });
+    if (!message.member.permissions.has(PermissionFlagsBits.ManageNicknames)) {
+      return reply("❌ No tienes permiso para cambiar apodos.");
     }
 
-    if (!target.manageable) {
-      return reply({
-        embeds: [
-          fail(
-            "❌ No puedo cambiar el apodo de ese usuario."
-          )
-        ]
-      });
+    const target = message.mentions.members.first();
+
+    if (!target) {
+      return reply("👤 Menciona al usuario.");
     }
 
-    await target.setNickname(nickname);
+    const nickname = args.slice(1).join(" ");
 
-    return reply({
-      embeds: [
-        ok(
-          `✏️ Nuevo apodo de **${target.user.tag}**: **${nickname}**`
-        )
-      ]
-    });
+    if (!nickname) {
+      return reply("✏️ Escribe el nuevo apodo.");
+    }
+
+    try {
+      await target.setNickname(nickname);
+
+      return reply({
+        embeds: [
+          ok(`✏️ Apodo cambiado para **${target.user.tag}**.`)
+        ]
+      });
+    } catch {
+      return reply("❌ No pude cambiar el apodo.");
+    }
   }
 
   if (command === "mute") {
-    const target =
-      message.mentions.members.first();
+    if (!message.member.permissions.has(PermissionFlagsBits.ModerateMembers)) {
+      return reply("❌ No tienes permiso para silenciar.");
+    }
+
+    const target = message.mentions.members.first();
 
     if (!target) {
+      return reply("🔇 Menciona al usuario.");
+    }
+
+    try {
+      await target.timeout(10 * 60 * 1000, "Mute mediante Joshua");
+
       return reply({
         embeds: [
-          fail("Uso: `p.mute @usuario`.")
+          ok(`🔇 **${target.user.tag}** fue silenciado durante **10 minutos**.`)
         ]
       });
+    } catch {
+      return reply("❌ No pude silenciar a ese usuario.");
     }
-
-    let mutedRole =
-      message.guild.roles.cache.find(
-        role => role.name === "Muted"
-      );
-
-    if (!mutedRole) {
-      mutedRole =
-        await message.guild.roles.create({
-          name: "Muted",
-          reason: "Rol creado por Joshua"
-        });
-    }
-
-    await target.roles.add(mutedRole);
-
-    return reply({
-      embeds: [
-        ok(
-          `🔇 **${target.user.tag}** recibió el rol **Muted**.`
-        )
-      ]
-    });
   }
 
   if (command === "unmute") {
-    const target =
-      message.mentions.members.first();
+    if (!message.member.permissions.has(PermissionFlagsBits.ModerateMembers)) {
+      return reply("❌ No tienes permiso para quitar silencios.");
+    }
+
+    const target = message.mentions.members.first();
 
     if (!target) {
-      return reply({
-        embeds: [
-          fail("Uso: `p.unmute @usuario`.")
-        ]
-      });
+      return reply("🔊 Menciona al usuario.");
     }
 
-    const mutedRole =
-      message.guild.roles.cache.find(
-        role => role.name === "Muted"
-      );
+    try {
+      await target.timeout(null, "Mute retirado mediante Joshua");
 
-    if (!mutedRole) {
       return reply({
         embeds: [
-          fail("❌ No existe el rol Muted.")
+          ok(`🔊 **${target.user.tag}** ya no está silenciado.`)
         ]
       });
+    } catch {
+      return reply("❌ No pude quitar el silencio.");
     }
-
-    await target.roles.remove(mutedRole);
-
-    return reply({
-      embeds: [
-        ok(
-          `🔊 Se quitó el rol **Muted** a **${target.user.tag}**.`
-        )
-      ]
-    });
   }
-
-  // =========================
-  // DESCONOCIDO
-  // =========================
-
-  return reply({
-    embeds: [
-      fail(
-        `❓ No conozco el comando \`${PREFIX}${command}\`.\n` +
-        "Usa **p.help** para ver los comandos."
-      )
-    ]
-  });
 });
 
-// =========================
-// MENÚ DE AYUDA
-// =========================
+/* =========================
+   SELECT MENU
+========================= */
 
 client.on("interactionCreate", async interaction => {
-  if (
-    !interaction.isStringSelectMenu() ||
-    interaction.customId !== "joshua_help"
-  ) {
-    return;
-  }
+  if (!interaction.isStringSelectMenu()) return;
 
-  await interaction.update({
+  if (interaction.customId !== "help_menu") return;
+
+  const category = interaction.values[0];
+
+  const texts = {
+    ia:
+      "🤖 **IA**\n\n" +
+      "`p.r <pregunta>` — Pregúntale a Joshua AI.\n" +
+      "`p.chatgpt <pregunta>` — Mismo sistema.",
+
+    economy:
+      "💰 **Economía**\n\n" +
+      "`p.balance`\n" +
+      "`p.daily`\n" +
+      "`p.work`\n" +
+      "`p.crimen`\n" +
+      "`p.dep`\n" +
+      "`p.with`\n" +
+      "`p.pay`\n" +
+      "`p.profile`",
+
+    fun:
+      "🎮 **Diversión**\n\n" +
+      "`p.coinflip`\n" +
+      "`p.dado`\n" +
+      "`p.random`\n" +
+      "`p.choose`\n" +
+      "`p.8ball`\n" +
+      "`p.joke`\n" +
+      "`p.rps`",
+
+    social:
+      "👥 **Social**\n\n" +
+      "`p.highfive @usuario`\n" +
+      "`p.compliment @usuario`\n" +
+      "`p.say texto`\n" +
+      "`p.userinfo @usuario`",
+
+    mod:
+      "🛡️ **Moderación**\n\n" +
+      "`p.ban @usuario`\n" +
+      "`p.unban ID`\n" +
+      "`p.kick @usuario`\n" +
+      "`p.warn @usuario`\n" +
+      "`p.purge cantidad`\n" +
+      "`p.lock`\n" +
+      "`p.unlock`\n" +
+      "`p.slowmode segundos`\n" +
+      "`p.nick @usuario apodo`\n" +
+      "`p.mute @usuario`\n" +
+      "`p.unmute @usuario`"
+  };
+
+  await interaction.reply({
     embeds: [
-      help(interaction.values[0])
+      info(texts[category] || "❌ Categoría desconocida.")
     ],
-    components: [
-      helpMenu()
-    ]
+    ephemeral: true
   });
 });
 
-// =========================
-// EVENTOS
-// =========================
-
-client.once("ready", () => {
-  console.log(
-    `🤖 Joshua está conectado como ${client.user.tag}`
-  );
-});
-
-client.on("error", error => {
-  console.error("❌ Error de Discord:", error);
-});
+/* =========================
+   ERRORES
+========================= */
 
 process.on("unhandledRejection", error => {
   console.error("❌ Unhandled Rejection:", error);
@@ -1645,9 +1278,9 @@ process.on("uncaughtException", error => {
   console.error("❌ Uncaught Exception:", error);
 });
 
-// =========================
-// SERVIDOR PARA RENDER
-// =========================
+/* =========================
+   SERVIDOR PARA RENDER
+========================= */
 
 const PORT = process.env.PORT || 3000;
 
@@ -1660,18 +1293,24 @@ http
     res.end("Joshua está funcionando 🤖🟢");
   })
   .listen(PORT, "0.0.0.0", () => {
-    console.log(
-      `🌐 Servidor iniciado en el puerto ${PORT}`
-    );
+    console.log(`🌐 Servidor iniciado en el puerto ${PORT}`);
   });
 
-// =========================
-// LOGIN
-// =========================
+/* =========================
+   LOGIN
+========================= */
 
 if (!process.env.DISCORD_TOKEN) {
   console.error(
     "❌ Falta DISCORD_TOKEN en las variables de Render."
+  );
+
+  process.exit(1);
+}
+
+if (!process.env.OPENAI_API_KEY) {
+  console.error(
+    "❌ Falta OPENAI_API_KEY en las variables de Render."
   );
 
   process.exit(1);
@@ -1683,11 +1322,7 @@ client
     console.log("🔐 Login de Discord correcto.");
   })
   .catch(error => {
-    console.error(
-      "❌ No se pudo iniciar sesión en Discord."
-    );
-
+    console.error("❌ No se pudo iniciar sesión en Discord.");
     console.error(error.message);
-
     process.exit(1);
   });
