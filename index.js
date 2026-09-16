@@ -2,7 +2,10 @@ const {
   Client,
   GatewayIntentBits,
   PermissionsBitField,
-  ChannelType
+  ChannelType,
+  ActionRowBuilder,
+  StringSelectMenuBuilder,
+  EmbedBuilder
 } = require("discord.js");
 const http = require("http");
 const fs = require("fs");
@@ -99,7 +102,7 @@ function error(text) {
   return `╭━━━〔 ❌ ERROR 〕━━━╮\n┃ ${text}\n╰━━━━━━━━━━━━━━━━━━╯`;
 }
 function box(title, text) {
-  return `╔══════════════════════════════╗\n║ ${title}\n╠══════════════════════════════╣\n${text}\n╚══════════════════════════════╝`;
+  return `╔══════════════════════════════╗\n║ ${title}\n╠═════════════════════════[...]
 }
 function isAdmin(message) {
   return Boolean(message.member?.permissions.has(PermissionsBitField.Flags.Administrator));
@@ -120,6 +123,176 @@ function parseAmount(value) {
   return Number.isSafeInteger(amount) && amount > 0 ? amount : null;
 }
 
+const helpCategories = {
+  economy: {
+    emoji: "💰",
+    name: "Economía",
+    description: "Comandos de dinero, trabajo, robos y banco.",
+    commands: [
+      "`p.balance` — Ver tu dinero.",
+      "`p.bank` — Ver tu banco.",
+      "`p.daily` — Recompensa diaria.",
+      "`p.work` — Trabajar y ganar cash.",
+      "`p.crimen` — Misión de riesgo.",
+      "`p.hut` — Pregunta por dinero.",
+      "`p.rob @usuario` — Robar a otro usuario.",
+      "`p.dep all` — Depositar todo al banco.",
+      "`p.with all` — Retirar todo del banco.",
+      "`p.gift @usuario cantidad` — Regalar dinero.",
+      "`p.pay @usuario cantidad` — Enviar dinero."
+    ]
+  },
+  shop: {
+    emoji: "🛒",
+    name: "Tienda",
+    description: "Compra, vende y gestiona tu inventario.",
+    commands: [
+      "`p.shop` — Ver tienda.",
+      "`p.buy objeto` — Comprar un objeto.",
+      "`p.sell objeto` — Vender un objeto.",
+      "`p.inventory` — Ver inventario.",
+      "`p.mission` — Completar misión.",
+      "`p.profile` — Ver perfil principal."
+    ]
+  },
+  profile: {
+    emoji: "👤",
+    name: "Perfil",
+    description: "Tu información personal y estadísticas.",
+    commands: [
+      "`p.profile` — Ver tu perfil.",
+      "`p.stats` — Ver tus estadísticas.",
+      "`p.userinfo @usuario` — Información de usuario.",
+      "`p.rank` — Top de usuarios ricos."
+    ]
+  },
+  fun: {
+    emoji: "🎮",
+    name: "Diversión",
+    description: "Minijuegos, random y entretenimiento.",
+    commands: [
+      "`p.coinflip` — Lanzar moneda.",
+      "`p.dado` — Lanzar dado.",
+      "`p.risk` — Juego de riesgo.",
+      "`p.8ball pregunta` — Bola mágica.",
+      "`p.emoji` — Emoji aleatorio.",
+      "`p.challenge` — Reto aleatorio.",
+      "`p.rps opción` — Piedra, papel o tijera.",
+      "`p.joke` — Chiste.",
+      "`p.trivia` — Trivia.",
+      "`p.choose opción1 opción2` — Elegir al azar.",
+      "`p.random número` — Número aleatorio.",
+      "`p.highfive @usuario` — Dar un high-five.",
+      "`p.compliment @usuario` — Dar un cumplido."
+    ]
+  },
+  social: {
+    emoji: "👥",
+    name: "Social",
+    description: "Info social, perfiles y estado del servidor.",
+    commands: [
+      "`p.whois @usuario` — Información del usuario.",
+      "`p.online` — Ver miembros online.",
+      "`p.compliment @usuario` — Felicitar a alguien.",
+      "`p.highfive @usuario` — Saludar con high-five."
+    ]
+  },
+  server: {
+    emoji: "🏰",
+    name: "Servidor",
+    description: "Información del servidor y sus canales.",
+    commands: [
+      "`p.serverinfo` — Información del servidor.",
+      "`p.channels` — Ver canales.",
+      "`p.roles` — Ver roles.",
+      "`p.emojis` — Ver emojis del servidor.",
+      "`p.boosts` — Ver boosts.",
+      "`p.created` — Fecha de creación."
+    ]
+  },
+  utilities: {
+    emoji: "⚙️",
+    name: "Utilidades",
+    description: "Comandos rápidos y útiles del bot.",
+    commands: [
+      "`p.ping` — Ver latencia del bot.",
+      "`p.status` — Estado del bot.",
+      "`p.hola` — Saludar.",
+      "`p.info` — Información del bot.",
+      "`p.say texto` — Haz que Joshua hable."
+    ]
+  },
+  admin: {
+    emoji: "🛡️",
+    name: "Administración",
+    description: "Comandos de moderación para administradores.",
+    commands: [
+      "`p.helpadmin` — Ver ayuda de administración.",
+      "`p.mute @usuario` — Silenciar.",
+      "`p.unmute @usuario` — Quitar mute.",
+      "`p.kick @usuario` — Expulsar.",
+      "`p.ban @usuario` — Banear.",
+      "`p.unban ID` — Desbanear por ID.",
+      "`p.warn @usuario` — Advertir.",
+      "`p.purge cantidad` — Borrar mensajes.",
+      "`p.lock` — Bloquear canal.",
+      "`p.unlock` — Desbloquear canal.",
+      "`p.slowmode segundos` — Slowmode.",
+      "`p.nick @usuario nombre` — Cambiar apodo.",
+      "`p.roleinfo nombre` — Ver información del rol."
+    ]
+  }
+};
+
+function buildHelpMenu(currentCategory = "home") {
+  const options = [
+    { label: "🏠 Inicio", value: "home", description: "Volver al menú principal." },
+    ...Object.entries(helpCategories).map(([key, category]) => ({
+      label: `${category.emoji} ${category.name}`,
+      value: key,
+      description: category.description
+    }))
+  ];
+
+  const menu = new StringSelectMenuBuilder()
+    .setCustomId("help_menu")
+    .setPlaceholder(currentCategory === "home" ? "Selecciona una categoría" : `Categoría actual: ${helpCategories[currentCategory].name}`)
+    .addOptions(options.map(option => ({
+      label: option.label,
+      value: option.value,
+      description: option.description,
+      emoji: option.label.startsWith("🏠") ? "🏠" : undefined
+    })));
+
+  return new ActionRowBuilder().addComponents(menu);
+}
+
+function getHelpEmbed(categoryKey = "home") {
+  if (categoryKey === "home") {
+    const categoriesList = Object.entries(helpCategories)
+      .map(([key, category]) => `${category.emoji} **${category.name}** - ${category.description}`)
+      .join("\n");
+
+    return new EmbedBuilder()
+      .setColor(0x5865F2)
+      .setTitle("🤖 Joshua - Ayuda")
+      .setDescription("Selecciona una categoría del menú para ver sus comandos.")
+      .addFields({ name: "Categorías disponibles", value: categoriesList })
+      .setFooter({ text: `Prefix: ${PREFIX}` });
+  }
+
+  const category = helpCategories[categoryKey];
+  return new EmbedBuilder()
+    .setColor(0x00AE86)
+    .setTitle(`${category.emoji} ${category.name}`)
+    .setDescription(category.description)
+    .addFields({
+      name: "Comandos",
+      value: category.commands.join("\n")
+    })
+    .setFooter({ text: `Menú de ayuda • ${PREFIX}help` });
+}
+
 console.log("🤖 JOSHUA INICIANDO...");
 client.once("ready", () => {
   console.log(`🟢 Conectado como ${client.user.tag}`);
@@ -137,6 +310,21 @@ client.on("warn", info => console.warn("⚠️ Discord.js:", info));
 client.on("error", err => console.error("❌ Discord.js:", err));
 process.on("unhandledRejection", err => console.error("❌ Promesa no controlada:", err));
 process.on("uncaughtException", err => console.error("❌ Excepción no controlada:", err));
+
+client.on("interactionCreate", async interaction => {
+  if (!interaction.isStringSelectMenu()) return;
+  if (interaction.customId !== "help_menu") return;
+
+  const categoryKey = interaction.values[0] || "home";
+  const embed = getHelpEmbed(categoryKey);
+  const row = buildHelpMenu(categoryKey);
+
+  await interaction.update({
+    embeds: [embed],
+    components: [row],
+    allowedMentions: { repliedUser: false }
+  });
+});
 
 client.on("messageCreate", async message => {
   if (message.author.bot || !message.guild) return;
@@ -161,88 +349,11 @@ client.on("messageCreate", async message => {
     if (command === "info") return reply(box("🤖 JOSHUA", `┃ 🛠️ Versión: **2.0**\n┃ ⚡ Prefijo: **${PREFIX}**\n┃ 💰 Economía: **ACTIVA**\n┃ 🛡️ Administración: **ACTIVA**`));
 
     if (command === "help") {
-      return reply(
-`╔══════════════════════════════════╗
-║       🤖 JOSHUA — AYUDA 📖      ║
-╚══════════════════════════════════╝
-
-💰 ━━━ ECONOMÍA ━━━
-
-> 💵 \`p.balance\` — Ver tu dinero
-> 🏦 \`p.bank\` — Ver tu banco
-> 🎁 \`p.daily\` — Recompensa diaria
-> 💼 \`p.work\` — Trabajar
-> 🕵️ \`p.crimen\` — Misión de riesgo
-> 🧠 \`p.hut\` — Pregunta por dinero
-> 🥷 \`p.rob @usuario\` — Robo virtual
-> 🏦 \`p.dep all\` — Depositar todo
-> 💵 \`p.with all\` — Retirar todo
-> 🎁 \`p.gift @usuario cantidad\` — Regalar
-> 💸 \`p.pay @usuario cantidad\` — Pagar
-
-🛒 ━━━ TIENDA ━━━
-
-> 🛒 \`p.shop\` — Ver la tienda
-> 🛍️ \`p.buy objeto\` — Comprar
-> 🎒 \`p.inventory\` — Ver inventario
-> 💰 \`p.sell objeto\` — Vender
-> 🎯 \`p.mission\` — Misión
-
-👤 ━━━ PERFIL ━━━
-
-> 👤 \`p.profile\` — Tu perfil
-> 📊 \`p.stats\` — Tus estadísticas
-> 🔎 \`p.userinfo @usuario\` — Información de usuario
-> 🏰 \`p.serverinfo\` — Información del servidor
-> 👑 \`p.rank\` — Ranking
-
-🎮 ━━━ DIVERSIÓN ━━━
-
-> 🪙 \`p.coinflip\` — Lanzar moneda
-> 🎲 \`p.dado\` — Lanzar dado
-> 🎲 \`p.risk\` — Juego de riesgo
-> 🎱 \`p.8ball pregunta\` — Bola mágica
-> 😎 \`p.emoji\` — Emoji aleatorio
-> 🎯 \`p.challenge\` — Reto
-> 🪨 \`p.rps opción\` — Piedra, papel o tijera
-> 😂 \`p.joke\` — Chiste
-> 🧠 \`p.trivia\` — Trivia
-> 🎯 \`p.choose opciones\` — Elegir
-> 🔢 \`p.random número\` — Número aleatorio
-> 🙌 \`p.highfive @usuario\` — Chocar los cinco
-
-👥 ━━━ SOCIAL ━━━
-
-> ⭐ \`p.compliment @usuario\` — Felicitar
-> 👀 \`p.whois @usuario\` — Ver información
-> 🟢 \`p.online\` — Miembros conectados
-
-🏰 ━━━ SERVIDOR ━━━
-
-> 🏰 \`p.serverinfo\` — Información del servidor
-> 📚 \`p.channels\` — Ver canales
-> 🏷️ \`p.roles\` — Ver roles
-> 😎 \`p.emojis\` — Ver emojis
-> 🚀 \`p.boosts\` — Ver boosts
-> 📅 \`p.created\` — Fecha de creación
-
-⚙️ ━━━ UTILIDADES ━━━
-
-> 🏓 \`p.ping\` — Ver latencia
-> 📡 \`p.status\` — Estado de Joshua
-> 👋 \`p.hola\` — Saludar
-> 🤖 \`p.info\` — Información de Joshua
-> 📢 \`p.say texto\` — Joshua habla
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-🛡️ ¿Eres administrador?
-
-Usa **p.helpadmin** para ver
-los comandos de administración.
-
-╰━━━━━━━━━━━━━━━━━━━━━━━━━━╯`
-      );
+      return message.reply({
+        embeds: [getHelpEmbed("home")],
+        components: [buildHelpMenu("home")],
+        allowedMentions: { repliedUser: false }
+      });
     }
     if (command === "helpadmin") {
       if (!isAdmin(message)) return reply(error("🚫 Necesitas permisos de Administrador."));
@@ -295,7 +406,7 @@ los comandos de administración.
       ];
       const question = questions[random(0, questions.length - 1)];
       if (isHut) user.hut = Date.now();
-      await reply(`╭━━━〔 🧠 PREGUNTA 〕━━━╮\n┃ ❓ ${question[0]}\n┃ ⏳ Tienes **${isHut ? 30 : 20} segundos**.\n╰━━━━━━━━━━━━━━━━━━━╯`);
+      await reply(`╭━━━〔 🧠 PREGUNTA 〕━━━╮\n┃ ❓ ${question[0]}\n┃ ⏳ Tienes **${isHut ? 30 : 20} segundos**.\n╰━━━━━━━━━���━━━━━━━━━╯`);
       const collected = await message.channel.awaitMessages({ filter: m => m.author.id === message.author.id && !m.author.bot, max: 1, time: isHut ? 30000 : 20000 });
       const answer = collected.first();
       if (!answer) return reply(error("⏰ Se acabó el tiempo."));
