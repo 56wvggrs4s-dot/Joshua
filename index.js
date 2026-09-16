@@ -1,122 +1,120 @@
-const { Client, GatewayIntentBits, Events, PermissionsBitField, EmbedBuilder } = require("discord.js");
+const { Client, GatewayIntentBits, PermissionsBitField } = require("discord.js");
 const http = require("http");
 const fs = require("fs");
 
-const PORT = process.env.PORT || 3000;
-const TOKEN = process.env.DISCORD_TOKEN;
 const PREFIX = "p.";
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
+const TOKEN = process.env.DISCORD_TOKEN;
+const PORT = process.env.PORT || 3000;
 const ECONOMY_FILE = "./economy.json";
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
+
 let economy = {};
-if (fs.existsSync(ECONOMY_FILE)) { try { economy = JSON.parse(fs.readFileSync(ECONOMY_FILE, "utf8")); } catch { economy = {}; } }
+if (fs.existsSync(ECONOMY_FILE)) {
+  try { economy = JSON.parse(fs.readFileSync(ECONOMY_FILE, "utf8")); } catch { economy = {}; }
+}
 function saveEconomy() { fs.writeFileSync(ECONOMY_FILE, JSON.stringify(economy, null, 2)); }
-function getUser(id) { if (!economy[id]) economy[id] = { balance: 0, bank: 0, lastDaily: 0, lastWork: 0, lastRisk: 0, lastCrime: 0, lastHut: 0, lastRob: 0 }; return economy[id]; }
+function getUser(id) {
+  if (!economy[id]) economy[id] = { cash: 0, bank: 0, daily: 0, work: 0, crime: 0, hut: 0, rob: 0, risk: 0, stats: { work: 0, crime: 0, rob: 0, gifts: 0 } };
+  const u = economy[id];
+  u.cash ??= u.balance ?? 0; u.bank ??= 0; u.stats ??= { work: 0, crime: 0, rob: 0, gifts: 0 };
+  u.daily ??= u.lastDaily ?? 0; u.work ??= u.lastWork ?? 0; u.crime ??= u.lastCrime ?? 0; u.hut ??= u.lastHut ?? 0; u.rob ??= u.lastRob ?? 0; u.risk ??= u.lastRisk ?? 0;
+  return u;
+}
 function random(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
-function coins(n) { return Number(n).toLocaleString(); }
-function cooldownMessage(ms) { const s = Math.ceil(ms / 1000); if (s >= 60) { const m = Math.floor(s / 60), r = s % 60; return r ? `${m}m ${r}s` : `${m}m`; } return `${s}s`; }
-function admin(message) { return message.member?.permissions.has(PermissionsBitField.Flags.Administrator); }
-function targetUser(message) { return message.mentions.users.first(); }
-function targetMember(message) { return message.mentions.members.first(); }
+function money(n) { return `${Number(n).toLocaleString("es-ES")} 🪙`; }
+function cooldown(last, seconds) { const r = seconds * 1000 - (Date.now() - last); if (r <= 0) return null; const s = Math.ceil(r / 1000); return `⏳ Espera **${s >= 60 ? Math.ceil(s / 60) + " minuto(s)" : s + " segundo(s)"}**.`; }
+function success(t) { return `╭━━━〔 ✅ ÉXITO 〕━━━╮\n┃ ${t}\n╰━━━━━━━━━━━━━━━━━━╯`; }
+function error(t) { return `╭━━━〔 ❌ ERROR 〕━━━╮\n┃ ${t}\n╰━━━━━━━━━━━━━━━━━━╯`; }
+function box(title, text) { return `╔══════════════════════════════╗\n║ ${title}\n╠══════════════════════════════╣\n${text}\n╚══════════════════════════════╝`; }
+function isAdmin(m) { return m.member?.permissions.has(PermissionsBitField.Flags.Administrator); }
 
-client.once(Events.ClientReady, bot => console.log(`🤖 ${bot.user.tag} está conectado!`));
+client.once("ready", () => {
+  console.log(`🤖 Joshua conectado como ${client.user.tag}`);
+  client.user.setPresence({ activities: [{ name: "p.help 📖", type: 0 }], status: "online" });
+});
 
-client.on(Events.MessageCreate, async message => {
+client.on("messageCreate", async message => {
   try {
-    if (message.author.bot || !message.content.startsWith(PREFIX)) return;
+    if (message.author.bot || !message.content.toLowerCase().startsWith(PREFIX)) return;
     const args = message.content.slice(PREFIX.length).trim().split(/\s+/);
     const command = args.shift()?.toLowerCase();
     if (!command) return;
     const user = getUser(message.author.id);
     const reply = text => message.reply(text);
 
-    if (command === "ping") return reply("🏓 ¡Pong! Joshua está funcionando.");
-    if (command === "hola") return reply(`👋 ¡Hola, ${message.author}!`);
-    if (command === "info") return reply("🤖 **Joshua Bot**\n\n⚙️ Bot de Discord\n🔧 Prefijo: `p.`\n💰 Sistema de economía activo\n🛡️ Sistema de moderación activo");
-    if (command === "help") return reply("📚 **COMANDOS DE JOSHUA**\n\n🤖 **Generales**\n`p.ping` `p.hola` `p.info` `p.help` `p.serverinfo` `p.userinfo @usuario`\n\n💰 **Economía**\n`p.balance` `p.daily` `p.work` `p.risk` `p.crimen` `p.hut` `p.rob @usuario` `p.coinflip` `p.gift @usuario cantidad` `p.pay @usuario cantidad` `p.profile` `p.rank` `p.bank` `p.stats`\n\n🏦 **Banco**\n`p.dep all` `p.with all`\n\n🛡️ Usa `p.helpadmin` para administración.");
-
-    if (command === "serverinfo") {
-      if (!message.guild) return reply("❌ Este comando solo funciona dentro de un servidor.");
-      const g = message.guild, owner = await g.fetchOwner();
-      const roles = g.roles.cache.filter(r => r.id !== g.id).map(r => `<@&${r.id}>`).join(", ") || "Ninguno";
-      const embed = new EmbedBuilder().setTitle(`🏠 Información de ${g.name}`).setThumbnail(g.iconURL({ dynamic: true })).addFields(
-        { name: "📛 Nombre", value: g.name, inline: true }, { name: "🆔 ID", value: g.id, inline: true }, { name: "👑 Dueño", value: owner.user.tag, inline: true },
-        { name: "👥 Miembros", value: `${g.memberCount}`, inline: true }, { name: "🤖 Bots", value: `${g.members.cache.filter(m => m.user.bot).size}`, inline: true },
-        { name: "👤 Humanos", value: `${g.members.cache.filter(m => !m.user.bot).size}`, inline: true }, { name: "📅 Creado", value: `<t:${Math.floor(g.createdTimestamp / 1000)}:F>` },
-        { name: "📁 Canales", value: `${g.channels.cache.size}`, inline: true }, { name: "💬 Texto", value: `${g.channels.cache.filter(c => c.isTextBased()).size}`, inline: true },
-        { name: "🔊 Voz", value: `${g.channels.cache.filter(c => c.isVoiceBased()).size}`, inline: true }, { name: `🎭 Roles (${g.roles.cache.size - 1})`, value: roles.length > 1024 ? roles.slice(0, 1020) + "..." : roles }
-      ).setTimestamp();
-      return message.reply({ embeds: [embed] });
+    if (command === "ping") return reply(box("🏓 PONG", `┃ ⚡ Latencia: **${client.ws.ping}ms**\n┃ 🤖 Joshua está funcionando.\n┃ 🌐 Estado: **ONLINE 🟢**`));
+    if (command === "hola") return reply(box("👋 HOLA", `┃ ¡Hola, ${message.author}! 😎\n┃ ✨ ¡Qué bueno verte por aquí!\n┃ 🤖 Joshua te saluda.`));
+    if (command === "info") return reply(box("🤖 JOSHUA", "┃ 🛠️ Versión: **1.0**\n┃ ⚡ Prefix: **p.**\n┃ 💰 Economía: **ACTIVA**\n┃ 🎮 Diversión: **ACTIVA**\n┃ 🛡️ Administración: **ACTIVA**\n┃ 🌐 Estado: **ONLINE 🟢**"));
+    if (command === "help") return reply(`╔══════════════════════════════════╗\n║       🤖 JOSHUA — AYUDA 📖      ║\n╚══════════════════════════════════╝\n\n💰 ━━━ ECONOMÍA ━━━\n> 💵 \`p.balance\` · 🏦 \`p.bank\` · 🎁 \`p.daily\` · 💼 \`p.work\`\n> 🕵️ \`p.crimen\` · 🧠 \`p.hut\` · 🥷 \`p.rob @usuario\` · 🎲 \`p.risk\`\n> 🏦 \`p.dep all\` · 💵 \`p.with all\` · 🎁 \`p.gift @usuario cantidad\` · 💸 \`p.pay @usuario cantidad\`\n\n👤 ━━━ PERFIL ━━━\n> 👤 \`p.profile\` · 📊 \`p.stats\` · 🔎 \`p.userinfo @usuario\` · 🏰 \`p.serverinfo\` · 👑 \`p.rank\`\n\n🎮 ━━━ DIVERSIÓN ━━━\n> 🪙 \`p.coinflip\` · 🎲 \`p.dado\` · 🎱 \`p.8ball pregunta\` · 😎 \`p.emoji\`\n> 🎯 \`p.challenge\` · 📢 \`p.say texto\`\n\n⚙️ \`p.ping\` · \`p.hola\` · \`p.info\`\n\n🛡️ Usa **p.helpadmin** para comandos de administración.`);
+    if (command === "helpadmin") {
+      if (!isAdmin(message)) return reply(error("🚫 Necesitas permisos de Administrador."));
+      return reply(`╔══════════════════════════════════╗\n║       🛡️ JOSHUA — ADMIN         ║\n╚══════════════════════════════════╝\n\n🔨 \`p.mute @usuario\` · \`p.unmute @usuario\` · \`p.kick @usuario\`\n🔨 \`p.ban @usuario\` · \`p.unban ID\` · \`p.permaban @usuario\`\n⚠️ \`p.warn @usuario\` · 🧹 \`p.purge cantidad\``);
     }
 
-    if (command === "userinfo" || command === "user") {
-      if (!message.guild) return reply("❌ Este comando solo funciona dentro de un servidor.");
-      const m = targetMember(message) || message.member, u = getUser(m.user.id);
-      const roles = m.roles.cache.filter(r => r.id !== message.guild.id).map(r => `<@&${r.id}>`).join(", ") || "Ninguno";
-      const embed = new EmbedBuilder().setTitle(`👤 ${m.user.username}`).setThumbnail(m.user.displayAvatarURL({ dynamic: true })).addFields(
-        { name: "📛 Usuario", value: m.user.tag, inline: true }, { name: "🆔 ID", value: m.user.id, inline: true }, { name: "🤖 Bot", value: m.user.bot ? "Sí" : "No", inline: true },
-        { name: "📅 Cuenta creada", value: `<t:${Math.floor(m.user.createdTimestamp / 1000)}:F>` }, { name: "📥 Entró al servidor", value: m.joinedTimestamp ? `<t:${Math.floor(m.joinedTimestamp / 1000)}:F>` : "Desconocido" },
-        { name: "🎭 Roles", value: roles.length > 1024 ? roles.slice(0, 1020) + "..." : roles }, { name: "💰 Dinero", value: coins(u.balance), inline: true }, { name: "🏦 Banco", value: coins(u.bank), inline: true }, { name: "💎 Total", value: coins(u.balance + u.bank), inline: true }
-      ).setTimestamp();
-      return message.reply({ embeds: [embed] });
-    }
-
-    if (command === "balance" || command === "bal" || command === "profile" || command === "stats") return reply(`💰 **${message.author.username}**\n\n💵 Dinero: **${coins(user.balance)}**\n🏦 Banco: **${coins(user.bank)}**\n💎 Total: **${coins(user.balance + user.bank)}**`);
-    if (command === "bank") return reply(`🏦 **Tu banco**\n\n💰 Tienes **${coins(user.bank)} monedas** guardadas.`);
+    if (command === "balance" || command === "bal") return reply(box("💰 TU ECONOMÍA", `┃ 💵 Efectivo: **${money(user.cash)}**\n┃ 🏦 Banco: **${money(user.bank)}**\n┃ 💎 TOTAL: **${money(user.cash + user.bank)}**`));
+    if (command === "bank") return reply(box("🏦 BANCO", `┃ 🔐 Protegido: **${money(user.bank)}**\n┃ 💵 Efectivo: **${money(user.cash)}**\n┃ 💎 Total: **${money(user.cash + user.bank)}**`));
 
     if (command === "daily" || command === "work") {
-      const now = Date.now(), key = command === "daily" ? "lastDaily" : "lastWork", cd = command === "daily" ? 86400000 : 30000, remaining = cd - (now - user[key]);
-      if (remaining > 0) return reply(`⏰ Espera **${cooldownMessage(remaining)}** para volver a intentarlo.`);
-      const reward = command === "daily" ? 1000 : random(10, 150); user.balance += reward; user[key] = now; saveEconomy();
-      return reply(`${command === "daily" ? "🎁 **RECOMPENSA DIARIA**" : "💼 **¡Trabajaste!**"}\n\n💰 Ganaste **${coins(reward)} monedas**.`);
+      const key = command, cd = cooldown(user[key], command === "daily" ? 86400 : 30);
+      if (cd) return reply(error(cd));
+      const reward = command === "daily" ? 1000 : random(10, 150); user.cash += reward; user[key] = Date.now(); if (command === "work") user.stats.work++; saveEconomy();
+      return reply(success(`${command === "daily" ? "🎁 Recompensa diaria" : "💼 Trabajaste y ganaste"}: **${money(reward)}**.`));
     }
-
-    if (command === "risk" || command === "crimen") {
-      const crime = command === "crimen", now = Date.now(), key = crime ? "lastCrime" : "lastRisk", cd = crime ? 120000 : 60000, remaining = cd - (now - user[key]);
-      if (remaining > 0) return reply(`⏰ Espera **${cooldownMessage(remaining)}**.`);
-      user[key] = now;
-      if (Math.random() < (crime ? .20 : .30)) { const reward = crime ? random(300, 500) : random(100, 300); user.balance += reward; saveEconomy(); return reply(`🎲 **¡Ganaste!**\n\n💰 Recibiste **${coins(reward)} monedas**.`); }
-      const loss = Math.min(crime ? random(200, 600) : random(100, 400), user.balance); user.balance -= loss; saveEconomy(); return reply(`🚔 **¡Fallaste!**\n\n💸 Perdiste **${coins(loss)} monedas**.`);
+    if (command === "crimen" || command === "risk") {
+      const key = command === "crimen" ? "crime" : "risk", cd = cooldown(user[key], command === "crimen" ? 120 : 60);
+      if (cd) return reply(error(cd)); user[key] = Date.now(); if (command === "crimen") user.stats.crime++;
+      if (Math.random() < (command === "crimen" ? .2 : .3)) { const reward = random(command === "crimen" ? 300 : 100, command === "crimen" ? 500 : 300); user.cash += reward; saveEconomy(); return reply(success(`🎲 ¡Ganaste!\n┃ 💰 Recibiste **${money(reward)}**.`)); }
+      const loss = Math.min(user.cash, random(command === "crimen" ? 200 : 100, command === "crimen" ? 600 : 400)); user.cash -= loss; saveEconomy(); return reply(error(`🚨 Salió mal.\n┃ 💸 Perdiste **${money(loss)}**.`));
     }
-
     if (command === "hut") {
-      const now = Date.now(), remaining = 180000 - (now - user.lastHut); if (remaining > 0) return reply(`⏰ Espera **${cooldownMessage(remaining)}**.`); user.lastHut = now;
-      const questions = [{ question: "🌍 ¿Cuál es la capital de Francia?", answer: "paris" }, { question: "➕ ¿Cuánto es 7 + 8?", answer: "15" }, { question: "🪐 ¿Cuál es el planeta más cercano al Sol?", answer: "mercurio" }, { question: "🌊 ¿Cuántos océanos hay aproximadamente en la Tierra?", answer: "5" }, { question: "🐝 ¿Qué animal produce miel?", answer: "abeja" }];
-      const selected = questions[random(0, questions.length - 1)]; await reply(`🧠 **PREGUNTA POR DINERO**\n\n${selected.question}\n\n⏳ Tienes **30 segundos** para responder.`);
-      try { const collected = await message.channel.awaitMessages({ filter: m => m.author.id === message.author.id, max: 1, time: 30000, errors: ["time"] }); const answer = collected.first().content.trim().toLowerCase();
-        if (answer === selected.answer) { const reward = random(200, 500); user.balance += reward; saveEconomy(); return message.channel.send(`✅ **¡Correcto!**\n💰 Ganaste **${coins(reward)} monedas**.`); }
-        const loss = Math.min(random(300, 500), user.balance); user.balance -= loss; saveEconomy(); return message.channel.send(`❌ **Incorrecto.**\n💸 Perdiste **${coins(loss)} monedas**.`);
-      } catch { return message.channel.send("⏰ Se acabó el tiempo."); }
+      const cd = cooldown(user.hut, 180); if (cd) return reply(error(cd));
+      const qs = [{ q: "¿Cuánto es 7 × 8?", a: "56" }, { q: "¿Cuál es el planeta rojo?", a: "marte" }, { q: "¿Cuántos días tiene una semana?", a: "7" }, { q: "¿Cuál es la capital de Francia?", a: "paris" }], q = qs[random(0, qs.length - 1)]; user.hut = Date.now();
+      await reply(`╭━━━〔 🧠 PREGUNTA 〕━━━╮\n┃ ❓ ${q.q}\n┃ ⏳ Tienes **30 segundos**.\n╰━━━━━━━━━━━━━━━━━━━━╯`);
+      try { const c = await message.channel.awaitMessages({ filter: m => m.author.id === message.author.id, max: 1, time: 30000 }); const a = c.first().content.toLowerCase().trim(); if (a === q.a) { const r = random(200, 500); user.cash += r; saveEconomy(); return reply(success(`🧠 ¡Correcto!\n┃ 💰 Ganaste **${money(r)}**.`)); } const l = Math.min(user.cash, random(300, 500)); user.cash -= l; saveEconomy(); return reply(error(`❌ Incorrecto.\n┃ 💸 Perdiste **${money(l)}**.`)); } catch { return reply(error("⏰ Se acabó el tiempo.")); }
     }
-
     if (command === "rob") {
-      const now = Date.now(), remaining = 300000 - (now - user.lastRob); if (remaining > 0) return reply(`⏰ Espera **${cooldownMessage(remaining)}**.`);
-      const target = targetUser(message); if (!target) return reply("🥷 Usa `p.rob @usuario`."); if (target.id === message.author.id) return reply("😂 No puedes robarte a ti mismo."); if (target.bot) return reply("🤖 No puedes robarle a un bot.");
-      const victim = getUser(target.id); if (victim.balance <= 0) return reply(`💸 ${target.username} no tiene dinero en efectivo.`); user.lastRob = now;
-      if (Math.random() < .5) { const stolen = Math.min(random(50, 300), victim.balance); victim.balance -= stolen; user.balance += stolen; saveEconomy(); return reply(`🥷 **¡Robo exitoso!**\n\n💰 Conseguí **${coins(stolen)} monedas** de ${target}.`); }
-      const fine = Math.min(random(50, 200), user.balance); user.balance -= fine; saveEconomy(); return reply(`🚔 **¡Te atraparon!**\n\n💸 Perdiste **${coins(fine)} monedas**.`);
+      const cd = cooldown(user.rob, 300); if (cd) return reply(error(cd)); const target = message.mentions.users.first();
+      if (!target) return reply(error("🥷 Menciona a alguien.")); if (target.id === message.author.id) return reply(error("😂 No puedes robarte a ti mismo.")); const victim = getUser(target.id); if (victim.cash <= 0) return reply(error("💸 Esa persona no tiene efectivo.")); user.rob = Date.now();
+      if (Math.random() < .5) { const amount = Math.min(victim.cash, random(50, Math.max(50, victim.cash))); victim.cash -= amount; user.cash += amount; user.stats.rob++; saveEconomy(); return reply(success(`🥷 ¡Robo exitoso!\n┃ 💰 Conseguí **${money(amount)}**.`)); } saveEconomy(); return reply(error("🚨 ¡Te descubrieron! El robo falló."));
     }
-
-    if (command === "coinflip") return reply(`🪙 Lanzando la moneda...\n\n➡️ Resultado: ${Math.random() < .5 ? "🪙 **CARA**" : "🪙 **CRUZ**"}`);
+    if (command === "dep" || command === "deposit" || command === "with" || command === "withdraw") {
+      if (args[0]?.toLowerCase() !== "all") return reply(error(`Usa: \`p.${command === "dep" || command === "deposit" ? "dep" : "with"} all\``));
+      if (command === "dep" || command === "deposit") { if (user.cash <= 0) return reply(error("💵 No tienes efectivo.")); const n = user.cash; user.bank += n; user.cash = 0; saveEconomy(); return reply(success(`🏦 Depositaste **${money(n)}**.`)); }
+      if (user.bank <= 0) return reply(error("🏦 No tienes dinero en el banco.")); const n = user.bank; user.cash += n; user.bank = 0; saveEconomy(); return reply(success(`💵 Retiraste **${money(n)}**.`));
+    }
     if (command === "gift" || command === "pay") {
-      const target = targetUser(message), amount = Number(args.find(a => /^\d+$/.test(a))); if (!target || !amount) return reply(`🎁 Usa: \`p.${command} @usuario cantidad\``); if (target.id === message.author.id) return reply("😂 No puedes transferirte monedas a ti mismo."); if (target.bot && command === "gift") return reply("🤖 No puedes regalar monedas a un bot."); if (amount <= 0 || user.balance < amount) return reply("💸 Cantidad inválida o no tienes suficientes monedas."); const recipient = getUser(target.id); user.balance -= amount; recipient.balance += amount; saveEconomy(); return reply(`💸 Transferiste **${coins(amount)} monedas** a ${target}.`);
+      const target = message.mentions.users.first(), amount = parseInt(args.find(a => /^\d+$/.test(a))); if (!target || !amount || amount <= 0) return reply(error(`Usa: \`p.${command} @usuario cantidad\``)); if (target.id === message.author.id) return reply(error("😂 No puedes transferirte dinero.")); if (user.cash < amount) return reply(error("💸 No tienes suficiente efectivo.")); const receiver = getUser(target.id); user.cash -= amount; receiver.cash += amount; if (command === "gift") user.stats.gifts++; saveEconomy(); return reply(success(`${command === "gift" ? "🎁 Regalaste" : "💸 Enviaste"} **${money(amount)}** a **${target.username}**.`));
     }
-    if (command === "rank") { const ranking = Object.entries(economy).sort((a, b) => b[1].balance + b[1].bank - a[1].balance - a[1].bank).slice(0, 10); let text = "🏆 **TOP 10 MÁS RICOS**\n\n"; for (let i = 0; i < ranking.length; i++) { const [id, data] = ranking[i]; let name = "Usuario"; try { name = (await message.guild.members.fetch(id)).user.username; } catch {} text += `**${i + 1}.** ${name} — 💰 ${coins(data.balance + data.bank)}\n`; } return reply(text); }
-    if (command === "dep" || command === "deposit") { if (args[0]?.toLowerCase() !== "all") return reply("🏦 Usa `p.dep all`."); if (user.balance <= 0) return reply("💸 No tienes dinero para depositar."); user.bank += user.balance; const amount = user.balance; user.balance = 0; saveEconomy(); return reply(`🏦 Depositaste **${coins(amount)} monedas**.`); }
-    if (command === "with" || command === "withdraw") { if (args[0]?.toLowerCase() !== "all") return reply("💳 Usa `p.with all`."); if (user.bank <= 0) return reply("🏦 No tienes dinero en el banco."); const amount = user.bank; user.balance += amount; user.bank = 0; saveEconomy(); return reply(`💳 Retiraste **${coins(amount)} monedas**.`); }
+    if (command === "coinflip") return reply(box("🪙 COINFLIP", `┃ 🎯 Resultado:\n┃ **${Math.random() < .5 ? "CARA 🪙" : "CRUZ 🪙"}**`));
+    if (command === "dado") return reply(box("🎲 DADO", `┃ 🎯 Resultado: **${random(1, 6)}**`));
+    if (command === "8ball") { if (!args.length) return reply(error("🎱 Hazme una pregunta.")); const a = ["🎯 Sí.", "🤔 Probablemente.", "✨ Definitivamente.", "😬 No estoy seguro.", "❌ No.", "🔮 Las estrellas dicen que sí.", "🌙 Pregunta más tarde."]; return reply(box("🎱 MAGIC 8BALL", `┃ ❓ ${args.join(" ")}\n┃ 🔮 **${a[random(0, a.length - 1)]}**`)); }
+    if (command === "emoji") return reply(box("😎 EMOJI", `┃ Tu emoji es:\n┃ ${["😀", "😂", "😎", "🤯", "🔥", "💀", "👑", "🚀", "🎉", "🤖", "🤑", "🥶"][random(0, 11)]}`));
+    if (command === "challenge") return reply(box("🎯 RETO", `┃ ${["🎯 Escribe un mensaje usando solo emojis.", "😂 Cuenta un chiste.", "🧠 Di una capital de un país.", "🎮 Di tu videojuego favorito.", "⚡ Escribe una palabra al revés."][random(0, 4)]}`));
+    if (command === "say") { if (!args.length) return reply(error("📢 Escribe algo después de `p.say`.")); return reply(box("📢 JOSHUA DICE", `┃ ${args.join(" ")}`)); }
 
-    if (command === "helpadmin") { if (!admin(message)) return reply("❌ Este comando es exclusivo para administradores."); return reply("🛡️ **COMANDOS DE ADMINISTRACIÓN**\n\n`p.mute @usuario` `p.unmute @usuario` `p.kick @usuario` `p.ban @usuario` `p.unban ID` `p.permaban @usuario` `p.warn @usuario` `p.purge cantidad`"); }
-    if (["mute", "unmute", "kick", "ban", "permaban", "warn"].includes(command)) {
-      if (!admin(message)) return reply("❌ Necesitas permisos de administrador."); const member = targetMember(message), target = targetUser(message); if ((command !== "unban") && !member && command !== "warn") return reply(`❌ Usa \`p.${command} @usuario\`.`);
-      if (command === "warn") return reply(`⚠️ **Advertencia registrada** para ${target || "el usuario"}.\n📝 Moderador: ${message.author}`);
-      if (command === "mute") { if (!member.moderatable) return reply("❌ No puedo aplicar timeout a ese usuario."); await member.timeout(3600000, `Mute por ${message.author.tag}`); return reply(`🔇 ${member} ha sido muteado durante **1 hora**.`); }
-      if (command === "unmute") { if (!member.moderatable) return reply("❌ No puedo modificar a ese usuario."); await member.timeout(null); return reply(`🔊 ${member} ha sido desmuteado.`); }
-      if (command === "kick") { if (!member.kickable) return reply("❌ No puedo expulsar a ese usuario."); await member.kick(`Kick por ${message.author.tag}`); return reply(`👢 **${member.user.tag}** fue expulsado.`); }
-      if (!member.bannable) return reply("❌ No puedo banear a ese usuario."); await member.ban({ reason: `${command === "permaban" ? "Permaban" : "Ban"} por ${message.author.tag}` }); return reply(`🔨 **${member.user.tag}** fue baneado.`);
+    if (command === "profile" || command === "stats") return reply(box(command === "profile" ? `👤 PERFIL DE ${message.author.username}` : "📊 TUS ESTADÍSTICAS", `┃ 💵 Efectivo: **${money(user.cash)}**\n┃ 🏦 Banco: **${money(user.bank)}**\n┃ 💎 Total: **${money(user.cash + user.bank)}**\n┃ 💼 Trabajos: **${user.stats.work}**\n┃ 🕵️ Misiones: **${user.stats.crime}**\n┃ 🥷 Robos: **${user.stats.rob}**\n┃ 🎁 Regalos: **${user.stats.gifts}**`));
+    if (command === "rank") { const r = Object.entries(economy).map(([id, d]) => ({ id, total: (d.cash ?? d.balance ?? 0) + (d.bank ?? 0) })).sort((a, b) => b.total - a.total).slice(0, 10); return reply(box("👑 TOP 10 RICOS", r.map((x, i) => `┃ ${["🥇", "🥈", "🥉"][i] || "🏅"} <@${x.id}> — ${money(x.total)}`).join("\n") || "┃ 😢 Todavía no hay jugadores.")); }
+
+    if (command === "serverinfo") { if (!message.guild) return reply(error("Este comando solo funciona en un servidor.")); const g = message.guild, humans = g.members.cache.filter(m => !m.user.bot).size, bots = g.members.cache.filter(m => m.user.bot).size; return reply(box("🏰 INFORMACIÓN DEL SERVIDOR", `┃ 🏠 Nombre: **${g.name}**\n┃ 🆔 ID: \`${g.id}\`\n┃ 👑 Dueño: <@${g.ownerId}>\n┃ 👥 Miembros: **${g.memberCount}**\n┃ 👤 Humanos: **${humans}**\n┃ 🤖 Bots: **${bots}**\n┃ 💬 Canales: **${g.channels.cache.size}**\n┃ 🎭 Roles: **${g.roles.cache.size}**\n┃ 📅 Creado: <t:${Math.floor(g.createdTimestamp / 1000)}:D>`)); }
+    if (command === "userinfo" || command === "user") { if (!message.guild) return reply(error("Este comando solo funciona en un servidor.")); const m = message.mentions.members.first() || message.member, u = m.user, roles = m.roles.cache.filter(r => r.id !== message.guild.id).map(r => r.name).slice(0, 10).join(", ") || "Ninguno"; return reply(box("👤 INFORMACIÓN DEL USUARIO", `┃ 👤 Usuario: **${u.username}**\n┃ 🆔 ID: \`${u.id}\`\n┃ 🤖 Bot: **${u.bot ? "Sí" : "No"}\`\n┃ 📅 Cuenta: <t:${Math.floor(u.createdTimestamp / 1000)}:D>\n┃ 📥 Entró: ${m.joinedTimestamp ? `<t:${Math.floor(m.joinedTimestamp / 1000)}:D>` : "Desconocido"}\n┃ 🎭 Roles: **${roles}**`)); }
+
+    const adminCommands = ["mute", "unmute", "kick", "ban", "unban", "permaban", "warn", "purge"];
+    if (adminCommands.includes(command)) {
+      if (!isAdmin(message)) return reply(error("🚫 Necesitas permisos de Administrador."));
+      if (command === "unban") { if (!args[0]) return reply(error("🔓 Usa: `p.unban ID`")); try { await message.guild.members.unban(args[0]); return reply(success(`🔓 Usuario \`${args[0]}\` desbaneado.`)); } catch { return reply(error("❌ No encontré ese usuario en los baneados.")); } }
+      if (command === "purge") { const amount = parseInt(args[0]); if (!amount || amount < 1 || amount > 99) return reply(error("🧹 Usa una cantidad entre **1 y 99**.")); try { const deleted = await message.channel.bulkDelete(amount, true); const msg = await message.channel.send(success(`🧹 Eliminé **${deleted.size} mensajes**.`)); setTimeout(() => msg.delete().catch(() => {}), 4000); return; } catch { return reply(error("❌ No pude borrar los mensajes.")); } }
+      const member = message.mentions.members.first(); if (!member) return reply(error("Menciona al usuario."));
+      if (command === "warn") return reply(box("⚠️ ADVERTENCIA", `┃ 👤 Usuario: **${member.user.username}**\n┃ 👮 Moderador: **${message.author.username}**\n┃ ⚠️ El usuario recibió una advertencia.`));
+      try {
+        if (command === "mute") { if (!member.moderatable) return reply(error("❌ No puedo silenciar a ese usuario.")); await member.timeout(3600000, `Mute por ${message.author.tag}`); return reply(success(`🔇 **${member.user.username}** fue silenciado durante **1 hora**.`)); }
+        if (command === "unmute") { await member.timeout(null); return reply(success(`🔊 Se quitó el silencio a **${member.user.username}**.`)); }
+        if (command === "kick") { if (!member.kickable) return reply(error("❌ No puedo expulsar a ese usuario.")); await member.kick(`Kick por ${message.author.tag}`); return reply(success(`👢 **${member.user.username}** fue expulsado.`)); }
+        if (command === "ban" || command === "permaban") { if (!member.bannable) return reply(error("❌ No puedo banear a ese usuario.")); await member.ban({ reason: `${command} por ${message.author.tag}` }); return reply(success(`🔨 **${member.user.username}** fue baneado.`)); }
+      } catch { return reply(error("❌ No pude completar la acción.")); }
     }
-    if (command === "unban") { if (!admin(message)) return reply("❌ Necesitas permisos de administrador."); if (!args[0]) return reply("♻️ Usa `p.unban ID`."); try { await message.guild.members.unban(args[0], `Unban por ${message.author.tag}`); return reply(`♻️ Usuario **${args[0]}** desbaneado.`); } catch { return reply("❌ No encontré ese usuario entre los baneados o el ID no es válido."); } }
-    if (command === "purge") { if (!admin(message)) return reply("❌ Necesitas permisos de administrador."); const amount = Number(args[0]); if (!Number.isInteger(amount) || amount < 1 || amount > 99) return reply("🧹 Usa una cantidad entre **1 y 99**."); const deleted = await message.channel.bulkDelete(amount, true), confirmation = await message.channel.send(`🧹 Eliminé **${deleted.size} mensajes**.`); setTimeout(() => confirmation.delete().catch(() => {}), 3000); }
-  } catch (error) { console.error("❌ Error:", error); message.reply("❌ Ocurrió un error ejecutando ese comando.").catch(() => {}); }
+    return reply(`╭━━━〔 ❓ ¿QUÉ? 〕━━━╮\n┃ ❌ No conozco \`${PREFIX}${command}\`.\n┃ 📖 Usa **p.help**\n╰━━━━━━━━━━━━━━━━━━╯`);
+  } catch (e) { console.error("❌ Error:", e); message.reply(error("Ocurrió un error ejecutando ese comando.")).catch(() => {}); }
 });
 
-http.createServer((req, res) => { res.writeHead(200); res.end("Joshua está funcionando 🤖"); }).listen(PORT, () => console.log(`🌐 Servidor escuchando en el puerto ${PORT}`));
+http.createServer((req, res) => { res.writeHead(200); res.end("🤖 Joshua está funcionando correctamente."); }).listen(PORT, () => console.log(`🌐 Puerto ${PORT} activo.`));
 client.login(TOKEN);
