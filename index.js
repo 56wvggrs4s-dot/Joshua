@@ -3,9 +3,12 @@ const {
   GatewayIntentBits,
   Events
 } = require("discord.js");
+
 const http = require("http");
 
 const PORT = process.env.PORT || 3000;
+const TOKEN = process.env.DISCORD_TOKEN;
+const PREFIX = "p.";
 
 const client = new Client({
   intents: [
@@ -22,33 +25,41 @@ client.once(Events.ClientReady, (bot) => {
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
 
-  if (message.content === "!ping") {
-    await message.reply("🏓 ¡Pong!");
+  if (!message.content.startsWith(PREFIX)) return;
+
+  const command = message.content
+    .slice(PREFIX.length)
+    .trim()
+    .toLowerCase();
+
+  if (command === "ping") {
+    await message.reply("🏓 ¡Pong! Joshua está funcionando.");
   }
 
-  if (message.content === "!hola") {
-    await message.reply(`👋 ¡Hola, ${message.author}!`);
-  }
-
-  if (message.content === "!info") {
+  if (command === "help") {
     await message.reply(
-      "🤖 **Jodua Bot**\n\n" +
-      "⚙️ Bot de Discord\n" +
-      "📌 Escribe `!ayuda` para ver mis comandos."
+      "📚 **COMANDOS DE JOSHUA**\n\n" +
+      "🏓 `p.ping` — Comprueba si estoy funcionando\n" +
+      "📚 `p.help` — Muestra esta lista\n" +
+      "👋 `p.hola` — Saluda\n" +
+      "ℹ️ `p.info` — Información del bot"
     );
   }
 
-  if (message.content === "!ayuda") {
+  if (command === "hola") {
+    await message.reply(`👋 ¡Hola, ${message.author}!`);
+  }
+
+  if (command === "info") {
     await message.reply(
-      "📚 **COMANDOS**\n\n" +
-      "🏓 `!ping` — Comprueba si estoy funcionando\n" +
-      "👋 `!hola` — Saluda\n" +
-      "ℹ️ `!info` — Información del bot\n" +
-      "📚 `!ayuda` — Muestra esta lista"
+      "🤖 **Joshua Bot**\n\n" +
+      "⚙️ Bot de Discord\n" +
+      "🔧 Prefijo: `p.`"
     );
   }
 });
 
+// Puerto para Render
 http.createServer((req, res) => {
   res.writeHead(200);
   res.end("Joshua está funcionando 🤖");
@@ -56,4 +67,5 @@ http.createServer((req, res) => {
   console.log(`Servidor escuchando en el puerto ${PORT}`);
 });
 
-client.login(process.env.DISCORD_TOKEN);
+// Conectar a Discord
+client.login(TOKEN);
