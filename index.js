@@ -3,6 +3,9 @@ const {
   GatewayIntentBits,
   Events
 } = require("discord.js");
+const http = require("http");
+
+const PORT = process.env.PORT || 3000;
 
 const client = new Client({
   intents: [
@@ -44,6 +47,13 @@ client.on(Events.MessageCreate, async (message) => {
       "📚 `!ayuda` — Muestra esta lista"
     );
   }
+});
+
+http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end("Joshua está funcionando 🤖");
+}).listen(PORT, () => {
+  console.log(`Servidor escuchando en el puerto ${PORT}`);
 });
 
 client.login(process.env.DISCORD_TOKEN);
