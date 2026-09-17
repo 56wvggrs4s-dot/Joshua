@@ -1,239 +1,98 @@
-const {
-  Client,
-  GatewayIntentBits,
-  EmbedBuilder,
-  ActionRowBuilder,
-  StringSelectMenuBuilder,
-  PermissionFlagsBits
-} = require("discord.js");
+const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, PermissionFlagsBits } = require("discord.js");
 const fs = require("fs");
-const path = require("path");
 const http = require("http");
 
 const PREFIX = "p.";
-const DATA_FILE = path.join(__dirname, "economy.json");
-const PORT = Number(process.env.PORT) || 3000;
+const DATA_FILE = "./economy.json";
+const PORT = process.env.PORT || 3000;
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildPresences] });
 
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildPresences
-  ]
-});
-
+if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, "{}");
 let economy = {};
-try {
-  if (fs.existsSync(DATA_FILE)) economy = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
-} catch (error) {
-  console.error("❌ No se pudo leer economy.json:", error.message);
-  economy = {};
-}
+try { economy = JSON.parse(fs.readFileSync(DATA_FILE, "utf8")); } catch (error) { console.error("❌ Error leyendo economy.json.", error); }
 if (!economy || typeof economy !== "object" || Array.isArray(economy)) economy = {};
-function save() { try { fs.writeFileSync(DATA_FILE, JSON.stringify(economy, null, 2)); } catch (error) { console.error("❌ Error guardando datos:", error.message); } }
-
-function getUser(id) {
-  if (!economy[id] || typeof economy[id] !== "object" || economy[id]._guildConfig) {
-    economy[id] = { cash: 1000, bank: 0, wins: 0, losses: 0, messages: 0, commands: 0, daily: 0, work: 0, crime: 0, warnings: 0, inventory: {} };
-  }
-  const user = economy[id];
-  for (const key of ["cash", "bank", "wins", "losses", "messages", "commands", "daily", "work", "crime", "warnings"]) user[key] = Number(user[key]) || 0;
-  if (!user.inventory || typeof user.inventory !== "object" || Array.isArray(user.inventory)) user.inventory = {};
-  return user;
-}
-
-function getGuildConfig(id) {
-  const key = `guild:${id}`;
-  if (!economy[key] || typeof economy[key] !== "object") economy[key] = { _guildConfig: true, welcomeChannel: null, autoRole: null, autoReplies: {}, autoReactions: {} };
-  const config = economy[key];
-  if (!config.autoReplies || typeof config.autoReplies !== "object") config.autoReplies = {};
-  if (!config.autoReactions || typeof config.autoReactions !== "object") config.autoReactions = {};
-  return config;
-}
-
-const money = value => Number(value || 0).toLocaleString("es-ES");
+economy.guildSettings = economy.guildSettings && typeof economy.guildSettings === "object" && !Array.isArray(economy.guildSettings) ? economy.guildSettings : {};
+function save() { try { fs.writeFileSync(DATA_FILE, JSON.stringify(economy, null, 2)); } catch (error) { console.error("❌ Error guardando datos:", error); } }
+function getUser(id) { if (!economy[id] || typeof economy[id] !== "object" || Array.isArray(economy[id])) economy[id] = { cash: 1000, bank: 0, inventory: [], warnings: 0, commands: 0, created: Date.now() }; const u = economy[id]; for (const k of ["cash", "bank", "warnings", "commands"]) u[k] = Number(u[k]) || 0; if (!Array.isArray(u.inventory)) u.inventory = []; return u; }
+function getGuildSettings(id) { const s = economy.guildSettings[id] ||= { autoroles: [] }; if (!Array.isArray(s.autoroles)) s.autoroles = []; return s; }
+const money = n => Number(n || 0).toLocaleString("es-ES");
 const random = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
-const info = text => new EmbedBuilder().setColor(0x5865f2).setTitle("╭━━━〔 🤖 JOSHUA 〕━━━╮").setDescription(text).setFooter({ text: "Joshua 🤖 • Sistema oficial" }).setTimestamp();
-const ok = text => new EmbedBuilder().setColor(0x57f287).setTitle("╭━━━〔 ✅ JOSHUA 〕━━━╮").setDescription(text).setFooter({ text: "Joshua 🤖 • Acción completada" }).setTimestamp();
-const fail = text => new EmbedBuilder().setColor(0xed4245).setTitle("╭━━━〔 ❌ JOSHUA 〕━━━╮").setDescription(text).setFooter({ text: "Joshua 🤖 • Ha ocurrido un problema" }).setTimestamp();
+const embed = (color, title, text) => new EmbedBuilder().setColor(color).setTitle(title).setDescription(text).setTimestamp();
+const ok = text => embed(0x57f287, "✅ Joshua", text);
+const fail = text => embed(0xed4245, "❌ Joshua", text);
+const info = text => embed(0x5865f2, "🤖 Joshua", text);
 const isAdmin = message => Boolean(message.member?.permissions?.has(PermissionFlagsBits.Administrator));
 const cooldowns = new Map();
-function cooldown(id, command, seconds) {
-  const key = `${id}:${command}`, now = Date.now(), last = cooldowns.get(key) || 0, remaining = seconds * 1000 - (now - last);
-  if (remaining > 0) return remaining;
-  cooldowns.set(key, now);
-  return 0;
-}
-function left(ms) { const seconds = Math.ceil(ms / 1000); return seconds >= 3600 ? `${Math.floor(seconds / 3600)}h` : seconds >= 60 ? `${Math.floor(seconds / 60)}m` : `${seconds}s`; }
-
-const shopItems = {
-  cookie: { name: "🍪 Galleta", price: 100 },
-  pizza: { name: "🍕 Pizza", price: 500 },
-  diamond: { name: "💎 Diamante", price: 2500 },
-  crown: { name: "👑 Corona", price: 5000 }
-};
-
-const helpPages = {
-  main: ["╭━━━〔 📚 CENTRO DE AYUDA 〕━━━╮", "🤖 **JOSHUA**\n\n💰 Economía\n🛒 Tienda\n👤 Perfil\n🎮 Diversión\n👥 Social\n🏰 Servidor\n⚙️ Utilidades\n🛡️ Administración\n🤖 Automatización\n\n📌 Selecciona una categoría abajo."],
-  economy: ["╭━━━〔 💰 ECONOMÍA 〕━━━╮", "**p.balance** · Dinero\n**p.bank** · Banco\n**p.daily** · Recompensa diaria\n**p.work** · Trabajar\n**p.crimen** · Crimen ficticio\n**p.dep cantidad** · Depositar\n**p.with cantidad** · Retirar\n**p.pay @usuario cantidad** · Enviar dinero\n**p.gift @usuario cantidad** · Regalar dinero"],
-  shop: ["╭━━━〔 🛒 TIENDA 〕━━━╮", "**p.shop** · Ver tienda\n**p.buy objeto cantidad** · Comprar\n**p.inventory** · Inventario\n**p.sell objeto cantidad** · Vender"],
-  profile: ["╭━━━〔 👤 PERFIL 〕━━━╮", "**p.profile** · Ver perfil\n**p.stats** · Estadísticas\n**p.userinfo @usuario** · Información"],
-  fun: ["╭━━━〔 🎮 DIVERSIÓN 〕━━━╮", "**p.coinflip** · Moneda\n**p.dado** · Dado\n**p.random 1 100** · Aleatorio\n**p.choose uno | dos** · Elegir\n**p.8ball pregunta** · Bola mágica\n**p.rps** · Piedra, papel o tijera\n**p.joke** · Chiste"],
-  social: ["╭━━━〔 👥 SOCIAL 〕━━━╮", "**p.highfive @usuario** · Chocar los cinco\n**p.compliment @usuario** · Elogiar\n**p.say texto** · Hablar como Joshua\n**p.userinfo @usuario** · Información"],
-  server: ["╭━━━〔 🏰 SERVIDOR 〕━━━╮", "**p.serverinfo** · Información\n**p.channels** · Canales\n**p.roles** · Roles\n**p.emojis** · Emojis\n**p.boosts** · Boosts\n**p.created @usuario** · Creación"],
-  utility: ["╭━━━〔 ⚙️ UTILIDADES 〕━━━╮", "**p.ping** · Ping\n**p.help** · Ayuda\n**p.created @usuario** · Fecha de creación"],
-  admin: ["╭━━━〔 🛡️ ADMINISTRACIÓN 〕━━━╮", "**p.ban @usuario** · Banear\n**p.unban ID** · Desbanear\n**p.kick @usuario** · Expulsar\n**p.mute @usuario** · Silenciar\n**p.unmute @usuario** · Quitar silencio\n**p.warn @usuario motivo** · Advertir\n**p.purge cantidad** · Borrar\n**p.lock / p.unlock** · Bloquear\n**p.slowmode segundos** · Slowmode\n**p.nick @usuario nombre** · Apodo"],
-  automation: ["╭━━━〔 🤖 AUTOMATIZACIÓN 〕━━━╮", "⚠️ Solo administradores\n\n`p.bienvenidas #canal` · `p.bienvenidas off`\n`p.autoroles @rol` · `p.autoroles off`\n`p.autorespuestas agregar hola | respuesta`\n`p.autorespuestas quitar hola` · `p.autorespuestas lista`\n`p.autoreacciones agregar hola | 👋`\n`p.autoreacciones quitar hola` · `p.autoreacciones lista`"]
-};
-function help(category = "main") { const page = helpPages[category] || helpPages.main; return new EmbedBuilder().setColor(0x5865f2).setTitle(page[0]).setDescription(page[1]).setFooter({ text: "Joshua 🤖 • p.help" }).setTimestamp(); }
-function helpMenu() {
-  const options = [["Economía", "economy", "💰"], ["Tienda", "shop", "🛒"], ["Perfil", "profile", "👤"], ["Diversión", "fun", "🎮"], ["Social", "social", "👥"], ["Servidor", "server", "🏰"], ["Utilidades", "utility", "⚙️"], ["Administración", "admin", "🛡️"], ["Automatización", "automation", "🤖"]];
-  return new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId("joshua_help").setPlaceholder("📚 Selecciona una categoría").addOptions(options.map(([label, value, emoji]) => ({ label, value, emoji }))));
-}
+function cooldown(key, seconds) { const now = Date.now(), last = cooldowns.get(key) || 0, left = seconds * 1000 - now + last; if (left > 0) return Math.ceil(left / 1000); cooldowns.set(key, now); return 0; }
 function reply(message, payload) { return message.reply(typeof payload === "string" ? { content: payload, allowedMentions: { repliedUser: false } } : { ...payload, allowedMentions: { repliedUser: false } }); }
+function help() { return info(["📚 **Comandos de Joshua**", "", "💰 `p.balance` `p.bank` `p.daily` `p.work` `p.crimen` `p.robo @usuario`", "🏦 `p.dep cantidad` `p.with cantidad` `p.pay @usuario cantidad`", "🛒 `p.shop` `p.buy objeto` `p.inventory` `p.sell objeto`", "🎮 `p.coinflip` `p.dado` `p.random` `p.choose uno | dos` `p.8ball` `p.joke` `p.rps` `p.quote` `p.roast @usuario`", "👥 `p.highfive` `p.compliment` `p.avatar` `p.userinfo` `p.whois`", "🏠 `p.serverinfo` `p.membercount` `p.servericon` `p.channels` `p.roles` `p.emojis` `p.boosts` `p.created`", "🛡️ `p.say` `p.announce` `p.clear` `p.ban` `p.unban` `p.kick` `p.warn` `p.lock` `p.unlock` `p.slowmode` `p.nick` `p.mute` `p.unmute`", "🎭 `p.autorroles add/remove/list @rol`"].join("\n")); }
+function helpMenu() { return new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId("help_menu").setPlaceholder("📚 Selecciona una categoría").addOptions([{ label: "💰 Economía", description: "Dinero y recompensas", value: "economy" }, { label: "🛒 Tienda", description: "Compra y vende", value: "shop" }, { label: "🎮 Diversión", description: "Juegos", value: "fun" }, { label: "👥 Social", description: "Comandos sociales", value: "social" }, { label: "🏠 Servidor", description: "Información", value: "server" }, { label: "🛡️ Administración", description: "Moderación", value: "mod" }])); }
+const prices = { sombrero: 500, consola: 1500, laptop: 3000, auto: 5000, diamante: 10000 };
 
-client.once("ready", () => {
-  console.log(`🤖 Joshua está conectado como ${client.user.tag}`);
-  client.user.setPresence({ activities: [{ name: "p.help", type: 0 }], status: "online" });
-});
-
-client.on("guildMemberAdd", async member => {
-  try {
-    const config = getGuildConfig(member.guild.id);
-    if (config.autoRole) {
-      const role = member.guild.roles.cache.get(config.autoRole);
-      if (role?.editable) await member.roles.add(role, "Autorol de Joshua");
-    }
-    if (config.welcomeChannel) {
-      const channel = member.guild.channels.cache.get(config.welcomeChannel);
-      if (channel?.isTextBased()) await channel.send({ content: `👋 ¡Bienvenido/a ${member}! 🎉`, embeds: [new EmbedBuilder().setColor(0x5865f2).setTitle("╭━━━〔 👋 ¡BIENVENIDO/A! 〕━━━╮").setDescription(`🎉 ¡Qué alegría tenerte aquí, ${member}!\n\n👤 **Usuario:** ${member.user.username}\n🏰 **Servidor:** ${member.guild.name}\n\n📚 Lee las reglas y disfruta tu estancia.\n🤖 Usa \`p.help\` si necesitas ayuda.`).setThumbnail(member.user.displayAvatarURL({ size: 256 })).setTimestamp()] });
-    }
-  } catch (error) { console.error("❌ Error en bienvenida/autorol:", error); }
-});
+client.once("ready", () => { console.log(`🤖 Joshua conectado como ${client.user.tag}`); client.user.setPresence({ activities: [{ name: "p.help", type: 0 }], status: "online" }); });
+client.on("guildMemberAdd", async member => { try { for (const id of getGuildSettings(member.guild.id).autoroles) { const role = member.guild.roles.cache.get(id); if (role?.editable) await member.roles.add(role, "Autorol asignado por Joshua"); } } catch (error) { console.error("❌ Error asignando autoroles:", error); } });
 
 client.on("messageCreate", async message => {
-  if (message.author.bot || !message.guild) return;
-  const user = getUser(message.author.id);
-  user.messages++;
-  save();
-  const raw = message.content.trim(), content = raw.toLowerCase(), config = getGuildConfig(message.guild.id);
+  try {
+    if (message.author.bot || !message.guild) return;
+    const content = message.content.trim(), lower = content.toLowerCase();
+    if (lower === "hola joshua" || lower === "hola joshua!") return reply(message, { embeds: [info(`👋 ¡Hola ${message.author}! Soy **Joshua**.\n\nEscribe \`p.help\`.`)] });
+    if (lower.includes("buenas joshua") || lower.includes("buenos dias joshua")) return reply(message, { embeds: [info(`😎 ¡Buenas, ${message.author}!`)] });
+    if (!lower.startsWith(PREFIX)) return;
+    const args = content.slice(PREFIX.length).trim().split(/\s+/).filter(Boolean), command = (args.shift() || "").toLowerCase(), user = getUser(message.author.id);
+    if (!command) return; user.commands++; save(); const send = p => reply(message, p);
+    if (["help", "ayuda"].includes(command)) return send({ embeds: [help()], components: [helpMenu()] });
+    if (command === "ping") return send({ embeds: [info(`🏓 Ping: **${client.ws.ping}ms**`)] });
+    if (["balance", "bal"].includes(command)) return send({ embeds: [info(`💵 Efectivo: **${money(user.cash)} 🪙**\n🏦 Banco: **${money(user.bank)} 🪙**\n💎 Total: **${money(user.cash + user.bank)} 🪙**`)] });
+    if (command === "bank") return send({ embeds: [info(`🏦 Banco: **${money(user.bank)} 🪙**\n💵 Efectivo: **${money(user.cash)} 🪙**\n\nUsa \`p.dep all\` o \`p.with all\`.`)] });
+    if (command === "daily" || command === "work" || command === "crimen") { const wait = { daily: 86400, work: 30, crimen: 60 }[command], cd = cooldown(`${command}:${message.author.id}`, wait); if (cd) return send({ embeds: [fail(`⏳ Espera **${cd}s** para volver a intentarlo.`)] }); if (command === "daily") { const n = random(500, 1500); user.cash += n; save(); return send({ embeds: [ok(`🎁 Recibiste **${money(n)} 🪙**.`)] }); } if (command === "work") { const n = random(100, 500); user.cash += n; save(); return send({ embeds: [ok(`💼 Ganaste **${money(n)} 🪙**.`)] }); } const success = Math.random() < .55, n = success ? random(200, 800) : Math.min(user.cash, random(50, 300)); user.cash += success ? n : -n; save(); return send({ embeds: [success ? ok(`🎭 Ganaste **${money(n)} 🪙**.`) : fail(`🚨 Perdiste **${money(n)} 🪙**.`)] }); }
+    if (["dep", "deposit", "depositar", "with", "withdraw", "retirar"].includes(command)) { const withdraw = ["with", "withdraw", "retirar"].includes(command), raw = (args[0] || "").toLowerCase(), source = withdraw ? user.bank : user.cash, amount = raw === "all" ? source : Number(raw); if (!Number.isSafeInteger(amount) || amount <= 0 || amount > source) return send({ embeds: [fail("❌ Cantidad inválida o fondos insuficientes.")] }); if (withdraw) { user.bank -= amount; user.cash += amount; } else { user.cash -= amount; user.bank += amount; } save(); return send({ embeds: [ok(`${withdraw ? "💵 Retiraste" : "🏦 Depositaste"} **${money(amount)} 🪙**.`)] }); }
+    if (["pay", "pagar", "gift", "dar"].includes(command)) { const target = message.mentions.users.first(), amount = Number(args.find(x => /^\d+$/.test(x))); if (!target || target.bot || target.id === message.author.id || !Number.isSafeInteger(amount) || amount <= 0 || amount > user.cash) return send({ embeds: [fail("Uso: `p.pay @usuario cantidad`")] }); user.cash -= amount; getUser(target.id).cash += amount; save(); return send({ embeds: [ok(`💸 Has enviado **${money(amount)} 🪙** a ${target}.`)] }); }
+    if (["profile", "perfil"].includes(command)) return send({ embeds: [new EmbedBuilder().setColor(0x5865f2).setTitle(`👤 Perfil de ${message.author.username}`).setThumbnail(message.author.displayAvatarURL()).addFields({ name: "💵 Efectivo", value: `${money(user.cash)} 🪙`, inline: true }, { name: "🏦 Banco", value: `${money(user.bank)} 🪙`, inline: true }, { name: "💎 Total", value: `${money(user.cash + user.bank)} 🪙`, inline: true }, { name: "📊 Comandos", value: `${user.commands}`, inline: true }, { name: "⚠️ Advertencias", value: `${user.warnings}`, inline: true }).setTimestamp()] });
+    if (command === "stats") return send({ embeds: [info(`📊 **Estadísticas**\n\n🏠 Servidores: **${client.guilds.cache.size}**\n👥 Usuarios: **${client.users.cache.size}**\n⚙️ Comandos tuyos: **${user.commands}**`)] });
+    if (["shop", "tienda"].includes(command)) return send({ embeds: [info(Object.entries(prices).map(([k, v]) => `🛒 **${k}** — **${money(v)} 🪙**`).join("\n"))] });
+    if (["buy", "comprar"].includes(command)) { const item = (args[0] || "").toLowerCase(); if (!prices[item]) return send({ embeds: [fail("❌ Ese objeto no existe. Usa `p.shop`.")] }); if (user.cash < prices[item]) return send({ embeds: [fail("❌ No tienes suficiente dinero.")] }); user.cash -= prices[item]; user.inventory.push(item); save(); return send({ embeds: [ok(`🛒 Compraste **${item}** por **${money(prices[item])} 🪙**.`)] }); }
+    if (["inventory", "inv", "inventario"].includes(command)) return send({ embeds: [info(user.inventory.length ? `🎒 **Tu inventario**\n\n${user.inventory.map((x, i) => `${i + 1}. ${x}`).join("\n")}` : "🎒 Tu inventario está vacío.")] });
+    if (["sell", "vender"].includes(command)) { const item = (args[0] || "").toLowerCase(), index = user.inventory.indexOf(item); if (index < 0) return send({ embeds: [fail("❌ No tienes ese objeto.")] }); user.inventory.splice(index, 1); user.cash += Math.floor((prices[item] || 100) / 2); save(); return send({ embeds: [ok(`💰 Vendiste **${item}**.`)] }); }
+    if (["coinflip", "moneda"].includes(command)) return send({ embeds: [info(`🪙 Resultado: **${Math.random() < .5 ? "Cara" : "Cruz"}**`)] });
+    if (["dado", "dice"].includes(command)) return send({ embeds: [info(`🎲 Sacaste un **${random(1, 6)}**.`)] });
+    if (command === "random") { const min = Number(args[0] || 1), max = Number(args[1] || 100); if (!Number.isFinite(min) || !Number.isFinite(max) || min > max) return send({ embeds: [fail("Usa `p.random 1 100`")] }); return send({ embeds: [info(`🎲 Resultado: **${random(Math.ceil(min), Math.floor(max))}**`)] }); }
+    if (["choose", "elegir"].includes(command)) { const choices = args.join(" ").split("|").map(x => x.trim()).filter(Boolean); return send({ embeds: [choices.length > 1 ? info(`🤔 Joshua elige: **${choices[random(0, choices.length - 1)]}**`) : fail("Usa `p.choose uno | dos`")] }); }
+    if (["8ball", "8-ball"].includes(command)) return send({ embeds: [info(["🟢 Sí.", "🟡 Tal vez.", "🔴 No.", "✨ Definitivamente."][random(0, 3)])] });
+    if (["joke", "chiste"].includes(command)) return send({ embeds: [info(["😂 ¿Qué hace una abeja en el gimnasio? ¡Zum-ba!", "🤣 ¿Qué le dijo un techo a otro? Techo de menos.", "😎 ¿Cuál es el colmo de un jardinero? Que lo dejen plantado."][random(0, 2)])] });
+    if (["rps", "piedrapapel"].includes(command)) return send({ embeds: [info(`🎮 Joshua eligió **${["🪨 Piedra", "📄 Papel", "✂️ Tijera"][random(0, 2)]}**.`)] });
+    if (["quote", "roast", "highfive", "compliment"].includes(command)) { const target = message.mentions.users.first(); if (["roast", "compliment"].includes(command) && !target) return send({ embeds: [fail("Menciona a alguien.")] }); const text = command === "highfive" ? `🙌 ${message.author} le da un high five a ${target || "Joshua"}.` : command === "compliment" ? `${target} 🌟 ¡Eres genial!` : command === "roast" ? `${target} 😂 Necesitas una actualización.` : "🔥 Sigue avanzando."; return send({ embeds: [info(text)] }); }
+    if (["avatar", "pfp"].includes(command)) { const target = message.mentions.users.first() || message.author; return send({ embeds: [new EmbedBuilder().setColor(0x5865f2).setTitle(`🖼️ Avatar de ${target.username}`).setImage(target.displayAvatarURL({ size: 1024 })).setTimestamp()] }); }
+    if (["userinfo", "user", "whois"].includes(command)) { const target = message.mentions.users.first() || message.author, member = message.guild.members.cache.get(target.id); return send({ embeds: [info(`👤 Usuario: **${target.username}**\n🆔 ID: **${target.id}**\n📅 Cuenta: <t:${Math.floor(target.createdTimestamp / 1000)}:F>${member?.joinedTimestamp ? `\n🏠 Entrada: <t:${Math.floor(member.joinedTimestamp / 1000)}:F>` : ""}`)] }); }
+    if (["membercount", "miembros"].includes(command)) return send({ embeds: [info(`👥 Este servidor tiene **${message.guild.memberCount} miembros**.`)] });
+    if (["servericon", "icon"].includes(command)) { const icon = message.guild.iconURL({ size: 1024 }); return send(icon ? { embeds: [new EmbedBuilder().setColor(0x5865f2).setTitle(`🏠 Icono de ${message.guild.name}`).setImage(icon)] } : { embeds: [fail("❌ Este servidor no tiene icono.")] }); }
+    if (command === "serverinfo") { const g = message.guild; return send({ embeds: [info(`🏠 **${g.name}**\n👥 Miembros: **${g.memberCount}**\n💬 Canales: **${g.channels.cache.size}**\n🎭 Roles: **${g.roles.cache.size}**\n🚀 Boosts: **${g.premiumSubscriptionCount || 0}**`)] }); }
+    if (["channels", "roles", "emojis"].includes(command)) { const values = command === "channels" ? message.guild.channels.cache.filter(c => c.isTextBased()).map(String) : command === "roles" ? message.guild.roles.cache.filter(r => r.id !== message.guild.id).map(String) : message.guild.emojis.cache.map(String); return send({ embeds: [info(`📋 **${command}**\n\n${values.slice(0, 50).join("\n") || "Ninguno"}`)] }); }
+    if (command === "boosts") return send({ embeds: [info(`🚀 Nivel: **${message.guild.premiumTier}**\n💜 Boosts: **${message.guild.premiumSubscriptionCount || 0}**`)] });
+    if (command === "created") return send({ embeds: [info(`📅 Este servidor fue creado el <t:${Math.floor(message.guild.createdTimestamp / 1000)}:F>.`)] });
 
-  if (!content.startsWith(PREFIX)) {
-    for (const [trigger, response] of Object.entries(config.autoReplies)) if (content === trigger.toLowerCase()) { await reply(message, response); break; }
-    for (const [trigger, emoji] of Object.entries(config.autoReactions)) if (content === trigger.toLowerCase()) { await message.react(emoji).catch(() => {}); break; }
-    if (content.includes("hola joshua")) return reply(message, "👋 ¡Holaaa! Soy Joshua 🤖🔥");
-    if (content === "buenas") return reply(message, "😎 ¡Buenas! ¿Qué tal?");
-    if (content.includes("te quiero joshua")) return message.react("❤️").catch(() => {});
-    if (content.includes("joshua god") || content.includes("joshua goat")) return message.react("🔥").catch(() => {});
-    return;
-  }
-
-  const args = raw.slice(PREFIX.length).trim().split(/\s+/).filter(Boolean), command = (args.shift() || "").toLowerCase();
-  if (!command) return;
-  user.commands++;
-  save();
-  const send = payload => reply(message, payload);
-
-  if (["help", "ayuda"].includes(command)) return send({ embeds: [help()], components: [helpMenu()] });
-  if (command === "ping") return send({ embeds: [info(`🏓 **Ping:** ${client.ws.ping}ms\n\n🟢 Joshua está conectado.`)] });
-  if (["balance", "bal"].includes(command)) return send({ embeds: [info(`💵 **Efectivo:** ${money(user.cash)} 🪙\n🏦 **Banco:** ${money(user.bank)} 🪙\n💎 **Total:** ${money(user.cash + user.bank)} 🪙`)] });
-  if (command === "bank") return send({ embeds: [info(`🏦 **Banco:** ${money(user.bank)} 🪙\n💵 **Efectivo:** ${money(user.cash)} 🪙\n\nUsa \`p.dep all\` o \`p.with all\`.`)] });
-
-  if (["daily", "work", "crimen"].includes(command)) {
-    const seconds = { daily: 86400, work: 30, crimen: 120 }[command], cd = cooldown(message.author.id, command, seconds);
-    if (cd) return send({ embeds: [fail(`⏰ Espera **${left(cd)}** para volver a usarlo.`)] });
-    if (command === "daily") { user.cash += 1000; user.wins++; user.daily++; save(); return send({ embeds: [ok("🎁 Recibiste **1.000 🪙** por tu recompensa diaria.")] }); }
-    if (command === "work") { const n = random(10, 150); user.cash += n; user.wins++; user.work++; save(); return send({ embeds: [ok(`💼 Trabajaste y ganaste **${money(n)} 🪙**.`)] }); }
-    if (Math.random() < 0.2) { const n = random(300, 500); user.cash += n; user.wins++; user.crime++; save(); return send({ embeds: [ok(`🕵️ Crimen exitoso: ganaste **${money(n)} 🪙**.`)] }); }
-    const n = Math.min(user.cash, random(200, 600)); user.cash -= n; user.losses++; user.crime++; save(); return send({ embeds: [fail(`🚔 Crimen fallido: perdiste **${money(n)} 🪙**.`)] });
-  }
-
-  if (["dep", "deposit", "with", "withdraw"].includes(command)) {
-    const withdraw = ["with", "withdraw"].includes(command), arg = (args[0] || "").toLowerCase(), source = withdraw ? user.bank : user.cash, amount = arg === "all" ? source : Number(arg);
-    if (!Number.isSafeInteger(amount) || amount <= 0) return send({ embeds: [fail(`Usa \`p.${command} cantidad\` o \`all\`.`)] });
-    if (amount > source) return send({ embeds: [fail("💸 No tienes fondos suficientes.")] });
-    if (withdraw) { user.bank -= amount; user.cash += amount; } else { user.cash -= amount; user.bank += amount; }
-    save();
-    return send({ embeds: [ok(`${withdraw ? "📤 Retiraste" : "📥 Depositaste"} **${money(amount)} 🪙**.`)] });
-  }
-
-  if (["pay", "gift"].includes(command)) {
-    const target = message.mentions.users.first(), amount = Number(args.find(value => /^\d+$/.test(value)));
-    if (!target || target.bot || target.id === message.author.id || !Number.isSafeInteger(amount) || amount <= 0) return send({ embeds: [fail(`Uso: \`p.${command} @usuario cantidad\``)] });
-    if (user.cash < amount) return send({ embeds: [fail("💸 No tienes suficiente efectivo.")] });
-    user.cash -= amount; getUser(target.id).cash += amount; save();
-    return send({ embeds: [ok(`🎁 Enviaste **${money(amount)} 🪙** a ${target}.`)] });
-  }
-
-  if (["profile", "stats"].includes(command)) {
-    if (command === "stats") return send({ embeds: [info(`📊 **ESTADÍSTICAS**\n\n🎁 Daily: **${user.daily}**\n💼 Trabajo: **${user.work}**\n🕵️ Crimen: **${user.crime}**\n🏆 Victorias: **${user.wins}**\n💔 Derrotas: **${user.losses}**`)] });
-    return send({ embeds: [new EmbedBuilder().setColor(0x5865f2).setTitle(`╭━━━〔 👤 PERFIL 〕━━━╮`).setThumbnail(message.author.displayAvatarURL()).setDescription(`👤 **Usuario:** ${message.author.username}\n\n💵 **Efectivo:** ${money(user.cash)} 🪙\n🏦 **Banco:** ${money(user.bank)} 🪙\n🏆 **Victorias:** ${user.wins}\n💔 **Derrotas:** ${user.losses}\n💬 **Mensajes:** ${user.messages}\n⚙️ **Comandos:** ${user.commands}`).setTimestamp()] });
-  }
-
-  if (command === "shop") return send({ embeds: [info(Object.entries(shopItems).map(([id, item]) => `🛍️ **${id}** — ${item.name} — **${money(item.price)} 🪙**`).join("\n"))] });
-  if (command === "buy" || command === "sell") {
-    const id = (args[0] || "").toLowerCase(), quantity = Math.max(1, Number(args[1]) || 1), item = shopItems[id];
-    if (!item) return send({ embeds: [fail("Ese objeto no existe. Usa `p.shop`.")] });
-    if (command === "buy") { const total = item.price * quantity; if (user.cash < total) return send({ embeds: [fail("💸 No tienes suficiente dinero.")] }); user.cash -= total; user.inventory[id] = (user.inventory[id] || 0) + quantity; save(); return send({ embeds: [ok(`🛒 Compraste **${quantity}x ${item.name}** por **${money(total)} 🪙**.`)] }); }
-    if ((user.inventory[id] || 0) < quantity) return send({ embeds: [fail("��� No tienes suficientes unidades.")] }); user.inventory[id] -= quantity; const total = Math.floor(item.price * quantity / 2); user.cash += total; save(); return send({ embeds: [ok(`💰 Vendiste **${quantity}x ${item.name}** y recibiste **${money(total)} 🪙**.`)] });
-  }
-  if (["inventory", "inv"].includes(command)) { const entries = Object.entries(user.inventory).filter(([, amount]) => amount > 0); return send({ embeds: [info(entries.length ? `🎒 **TU INVENTARIO**\n\n${entries.map(([id, amount]) => `${shopItems[id]?.name || id}: **${amount}**`).join("\n")}` : "🎒 Tu inventario está vacío.")] }); }
-
-  if (command === "coinflip") return send({ embeds: [info(`🪙 Salió **${Math.random() < 0.5 ? "Cara" : "Cruz"}**.`)] });
-  if (["dado", "dice"].includes(command)) return send({ embeds: [info(`🎲 Tiraste el dado y salió **${random(1, 6)}**.`)] });
-  if (command === "random") { const min = Number(args[0]) || 1, max = Number(args[1]) || 100; if (!Number.isFinite(min) || !Number.isFinite(max) || min > max) return send({ embeds: [fail("Usa `p.random 1 100`.")] }); return send({ embeds: [info(`🎲 **Número aleatorio:** ${random(min, max)}`)] }); }
-  if (command === "choose" || command === "elegir") { const choices = args.join(" ").split("|").map(x => x.trim()).filter(Boolean); if (choices.length < 2) return send({ embeds: [fail("Usa `p.choose opción1 | opción2`.")] }); return send({ embeds: [info(`🤔 Joshua eligió: **${choices[random(0, choices.length - 1)]}**`)] }); }
-  if (command === "8ball") return send({ embeds: [info(["🟢 Sí.", "🔴 No.", "🤔 Tal vez.", "✨ Probablemente.", "🔥 Definitivamente."][random(0, 4)])] });
-  if (["joke", "chiste"].includes(command)) return send({ embeds: [info(["😂 ¿Qué hace una abeja en el gimnasio? ¡Zum-ba!", "🤣 ¿Qué le dijo un cero a un ocho? Bonito cinturón.", "😎 ¿Por qué el libro fue al médico? Porque tenía muchas páginas en blanco."][random(0, 2)])] });
-  if (["rps", "piedrapapel"].includes(command)) return send({ embeds: [info(`🎮 Joshua eligió **${["🪨 Piedra", "📄 Papel", "✂️ Tijera"][random(0, 2)]}**.`)] });
-  if (["highfive", "compliment"].includes(command)) { const target = message.mentions.users.first(); if (!target) return send({ embeds: [fail("Menciona a alguien.")] }); return send({ embeds: [ok(command === "highfive" ? `🙌 ¡${message.author} chocó los cinco con ${target}!` : `${target}, ✨ ¡Eres genial!`)] }); }
-
-  if (["userinfo", "user", "whois"].includes(command)) { const target = message.mentions.users.first() || message.author; return send({ embeds: [info(`👤 **Usuario:** ${target.username}\n🆔 **ID:** ${target.id}\n🤖 **Bot:** ${target.bot ? "Sí" : "No"}\n📅 **Cuenta creada:** <t:${Math.floor(target.createdTimestamp / 1000)}:F>`)] }); }
-  if (command === "serverinfo") { const guild = message.guild; return send({ embeds: [info(`🏰 **${guild.name}**\n👥 Miembros: **${guild.memberCount}**\n💬 Canales: **${guild.channels.cache.size}**\n🎭 Roles: **${guild.roles.cache.size}**\n😀 Emojis: **${guild.emojis.cache.size}**\n🚀 Boosts: **${guild.premiumSubscriptionCount || 0}**`)] }); }
-  if (command === "channels") return send({ embeds: [info(`💬 **CANALES**\n\n${message.guild.channels.cache.map(channel => `• ${channel}`).slice(0, 30).join("\n") || "Ninguno"}`)] });
-  if (command === "roles") return send({ embeds: [info(`🎭 **ROLES**\n\n${message.guild.roles.cache.filter(role => role.id !== message.guild.id).map(role => `• ${role}`).slice(0, 30).join("\n") || "Ninguno"}`)] });
-  if (command === "emojis") return send({ embeds: [info(`😀 **EMOJIS**\n\n${message.guild.emojis.cache.map(String).slice(0, 50).join(" ") || "Ninguno"}`)] });
-  if (command === "boosts") return send({ embeds: [info(`🚀 Este servidor tiene **${message.guild.premiumSubscriptionCount || 0} boosts**.`)] });
-  if (command === "created") { const target = message.mentions.users.first() || message.author; return send({ embeds: [info(`📅 La cuenta de **${target.username}** fue creada el:\n<t:${Math.floor(target.createdTimestamp / 1000)}:F>`)] }); }
-
-  const automationCommands = ["bienvenidas", "autoroles", "autorespuestas", "autoreacciones"];
-  if (automationCommands.includes(command)) {
-    if (!isAdmin(message)) return send({ embeds: [fail("🛡️ Este comando es exclusivamente para administradores.")] });
-    if (command === "bienvenidas") { if (args[0] === "off") config.welcomeChannel = null; else { const channel = message.mentions.channels.first(); if (!channel) return send({ embeds: [fail("Uso: `p.bienvenidas #canal` o `p.bienvenidas off`")] }); config.welcomeChannel = channel.id; } save(); return send({ embeds: [ok(config.welcomeChannel ? "👋 Bienvenidas configuradas." : "👋 Bienvenidas desactivadas.")] }); }
-    if (command === "autoroles") { if (args[0] === "off") config.autoRole = null; else { const role = message.mentions.roles.first(); if (!role || role.id === message.guild.id || role.position >= message.guild.members.me.roles.highest.position) return send({ embeds: [fail("❌ Rol inválido o no asignable.")] }); config.autoRole = role.id; } save(); return send({ embeds: [ok(config.autoRole ? "🎭 Autorol configurado." : "🎭 Autorol desactivado.")] }); }
-    const store = command === "autorespuestas" ? config.autoReplies : config.autoReactions, action = (args.shift() || "").toLowerCase();
-    if (action === "lista") return send({ embeds: [info(Object.entries(store).map(([key, value]) => `🔹 **${key}** → ${value}`).join("\n") || "No hay configuraciones.")] });
-    const key = args.join(" ");
-    if (action === "quitar") { if (!store[key.toLowerCase()]) return send({ embeds: [fail("❌ No existe esa configuración.")] }); delete store[key.toLowerCase()]; save(); return send({ embeds: [ok("🗑️ Configuración eliminada.")] }); }
-    if (action === "agregar") { const separator = key.indexOf("|"); if (separator < 0) return send({ embeds: [fail("Usa `agregar disparador | respuesta`.")] }); const trigger = key.slice(0, separator).trim().toLowerCase(), value = key.slice(separator + 1).trim(); if (!trigger || !value) return send({ embeds: [fail("Debes indicar el disparador y la respuesta.")] }); store[trigger] = value; save(); return send({ embeds: [ok("✅ Configuración agregada.")] }); }
-    return send({ embeds: [fail("Usa `agregar`, `quitar` o `lista`.")] });
-  }
-
-  const adminCommands = ["ban", "unban", "kick", "mute", "unmute", "warn", "purge", "clear", "lock", "unlock", "slowmode", "nick", "say"];
-  if (adminCommands.includes(command) && !isAdmin(message)) return send({ embeds: [fail("🛡️ Necesitas permisos de administrador.")] });
-  const target = message.mentions.members.first();
-  if (command === "ban" || command === "kick") { if (!target) return send({ embeds: [fail(`Uso: \`p.${command} @usuario\`.`)] }); if (command === "ban") { if (!target.bannable) return send({ embeds: [fail("No puedo banear a ese usuario.")] }); await target.ban({ reason: `Joshua: ${message.author.tag}` }); } else { if (!target.kickable) return send({ embeds: [fail("No puedo expulsar a ese usuario.")] }); await target.kick(`Joshua: ${message.author.tag}`); } return send({ embeds: [ok(`✅ ${target.user.tag} fue ${command === "ban" ? "baneado" : "expulsado"}.`)] }); }
-  if (command === "unban") { if (!args[0]) return send({ embeds: [fail("Uso: `p.unban ID`.")] }); try { await message.guild.members.unban(args[0]); return send({ embeds: [ok("🔓 Usuario desbaneado.")] }); } catch { return send({ embeds: [fail("No encontré un usuario baneado con ese ID.")] }); } }
-  if (["mute", "unmute"].includes(command)) { if (!target) return send({ embeds: [fail(`Uso: \`p.${command} @usuario\`.`)] }); if (!target.moderatable) return send({ embeds: [fail("No puedo moderar a ese usuario.")] }); await target.timeout(command === "mute" ? Math.min(Number(args[1]) || 10, 40320) * 60000 : null, `Joshua: ${command}`); return send({ embeds: [ok(command === "mute" ? "🔇 Usuario silenciado." : "🔊 Usuario desilenciado.")] }); }
-  if (command === "warn") { if (!target) return send({ embeds: [fail("Uso: `p.warn @usuario motivo`.")] }); const warned = getUser(target.id); warned.warnings++; save(); return send({ embeds: [ok(`⚠️ Advertencias de ${target.user.tag}: **${warned.warnings}**`)] }); }
-  if (command === "purge" || command === "clear") { const amount = Number(args[0]); if (!Number.isInteger(amount) || amount < 1 || amount > 100) return send({ embeds: [fail("Usa una cantidad entre 1 y 100.")] }); const deleted = await message.channel.bulkDelete(amount, true); const notice = await message.channel.send({ embeds: [ok(`🧹 Se eliminaron **${deleted.size} mensajes**.`)] }); setTimeout(() => notice.delete().catch(() => {}), 5000); return; }
-  if (command === "lock" || command === "unlock") { await message.channel.permissionOverwrites.edit(message.guild.roles.everyone, { SendMessages: command === "lock" ? false : null }); return send({ embeds: [ok(command === "lock" ? "🔒 Canal bloqueado." : "🔓 Canal desbloqueado.")] }); }
-  if (command === "slowmode") { const seconds = Number(args[0]); if (!Number.isInteger(seconds) || seconds < 0 || seconds > 21600) return send({ embeds: [fail("Usa un número entre 0 y 21600.")] }); await message.channel.setRateLimitPerUser(seconds); return send({ embeds: [ok(`🐌 Slowmode establecido en **${seconds} segundos**.`)] }); }
-  if (command === "nick") { if (!target || !args.slice(1).join(" ")) return send({ embeds: [fail("Uso: `p.nick @usuario nuevo-nombre`.")] }); if (!target.manageable) return send({ embeds: [fail("No puedo cambiar el apodo de ese usuario.")] }); await target.setNickname(args.slice(1).join(" ").slice(0, 32)); return send({ embeds: [ok("✏️ Apodo actualizado.")] }); }
-  if (command === "say") { if (!args.length) return send({ embeds: [fail("Escribe algo para que Joshua lo diga.")] }); return send({ embeds: [new EmbedBuilder().setColor(0x5865f2).setDescription(`╭━━━〔 🤖 JOSHUA 〕━━━╮\n\n${args.join(" ")}\n\n╰━━━━━━━━━━━━━━━━━━╯`).setFooter({ text: `Enviado por ${message.author.tag}` })] }); }
-  return send({ embeds: [fail(`❓ No conozco \`${PREFIX}${command}\`. Usa \`p.help\`.`)] });
+    const adminCommands = ["say", "decir", "announce", "anuncio", "clear", "purge", "ban", "unban", "kick", "warn", "lock", "unlock", "slowmode", "nick", "mute", "unmute", "autorroles", "autorole", "autorol"];
+    if (adminCommands.includes(command) && !isAdmin(message)) return send({ embeds: [fail("🛡️ Este comando es exclusivo para administradores.")] });
+    if (["autorroles", "autorole", "autorol"].includes(command)) { const sub = (args.shift() || "list").toLowerCase(), settings = getGuildSettings(message.guild.id), role = message.mentions.roles.first(); if (["add", "añadir", "agregar"].includes(sub)) { if (!role || !role.editable) return send({ embeds: [fail("Menciona un rol editable por Joshua.")] }); if (!settings.autoroles.includes(role.id)) settings.autoroles.push(role.id); save(); return send({ embeds: [ok(`🛡️ Autorol añadido: ${role}`)] }); } if (["remove", "eliminar", "quitar"].includes(sub)) { if (!role) return send({ embeds: [fail("Menciona un rol.")] }); settings.autoroles = settings.autoroles.filter(id => id !== role.id); save(); return send({ embeds: [ok(`➖ Autorol eliminado: ${role}`)] }); } return send({ embeds: [info(`🎭 Autoroles configurados:\n${settings.autoroles.map(id => message.guild.roles.cache.get(id)).filter(Boolean).join("\n") || "Ninguno"}`)] }); }
+    if (["say", "decir"].includes(command)) { const text = args.join(" "); if (!text) return send({ embeds: [fail("Escribe un mensaje.")] }); await message.delete().catch(() => {}); return message.channel.send({ content: text, allowedMentions: { parse: [] } }); }
+    if (["announce", "anuncio"].includes(command)) { const text = args.join(" "); return send({ embeds: [embed(0x5865f2, "📣 ANUNCIO", text || "Escribe el anuncio.")] }); }
+    const target = message.mentions.members.first();
+    if (["ban", "kick"].includes(command)) { if (!target) return send({ embeds: [fail("Menciona al usuario.")] }); if (command === "ban") await target.ban({ reason: args.slice(1).join(" ") || "Sin razón especificada" }); else await target.kick(args.slice(1).join(" ") || "Sin razón especificada"); return send({ embeds: [ok(`✅ Usuario ${command === "ban" ? "baneado" : "expulsado"}: **${target.user.tag}**`)] }); }
+    if (command === "unban") { try { await message.guild.members.unban(args[0]); return send({ embeds: [ok(`🔓 Usuario **${args[0]}** desbaneado.`)] }); } catch { return send({ embeds: [fail("❌ ID inválido o usuario no baneado.")] }); } }
+    if (command === "warn") { if (!target) return send({ embeds: [fail("Menciona al usuario.")] }); const warned = getUser(target.id); warned.warnings++; save(); return send({ embeds: [ok(`⚠️ Advertencia registrada para ${target}. Total: **${warned.warnings}**`)] }); }
+    if (["clear", "purge"].includes(command)) { const n = Number(args[0]); if (!Number.isInteger(n) || n < 1 || n > 100) return send({ embeds: [fail("Indica una cantidad entre 1 y 100.")] }); const deleted = await message.channel.bulkDelete(n, true); return send({ embeds: [ok(`🧹 Se eliminaron **${deleted.size} mensajes**.`)] }); }
+    if (["lock", "unlock"].includes(command)) { await message.channel.permissionOverwrites.edit(message.guild.roles.everyone, { SendMessages: command === "lock" ? false : null }); return send({ embeds: [ok(command === "lock" ? "🔒 Canal bloqueado." : "🔓 Canal desbloqueado.")] }); }
+    if (command === "slowmode") { const seconds = Number(args[0]); if (!Number.isInteger(seconds) || seconds < 0 || seconds > 21600) return send({ embeds: [fail("Indica segundos entre 0 y 21600.")] }); await message.channel.setRateLimitPerUser(seconds); return send({ embeds: [ok(`🐌 Slowmode: **${seconds}s**.`)] }); }
+    if (command === "nick") { if (!target || !args.slice(1).join(" ") || !target.manageable) return send({ embeds: [fail("Usa `p.nick @usuario NuevoNombre`.")] }); await target.setNickname(args.slice(1).join(" ")); return send({ embeds: [ok("✏️ Apodo cambiado.")] }); }
+    if (["mute", "unmute"].includes(command)) { if (!target) return send({ embeds: [fail("Menciona al usuario.")] }); await target.timeout(command === "mute" ? (Number(args[1]) || 10) * 60000 : null, "Acción aplicada por Joshua"); return send({ embeds: [ok(command === "mute" ? "🔇 Usuario silenciado." : "🔊 Usuario desilenciado.")] }); }
+    return send({ embeds: [fail(`❓ No conozco \`${PREFIX}${command}\`. Usa \`p.help\`.`)] });
+  } catch (error) { console.error("❌ Error en messageCreate:", error); try { await message.reply({ embeds: [fail("❌ Ocurrió un error ejecutando ese comando.")], allowedMentions: { repliedUser: false } }); } catch {} }
 });
 
-client.on("interactionCreate", async interaction => {
-  if (!interaction.isStringSelectMenu() || interaction.customId !== "joshua_help") return;
-  await interaction.update({ embeds: [help(interaction.values[0])], components: [helpMenu()] });
-});
+client.on("interactionCreate", async interaction => { if (!interaction.isStringSelectMenu() || interaction.customId !== "help_menu") return; const pages = { economy: "💰 Economía: `p.balance` `p.bank` `p.daily` `p.work` `p.crimen` `p.dep` `p.with` `p.pay`", shop: "🛒 Tienda: `p.shop` `p.buy` `p.inventory` `p.sell`", fun: "🎮 Diversión: `p.coinflip` `p.dado` `p.random` `p.choose` `p.8ball` `p.joke` `p.rps`", social: "👥 Social: `p.highfive` `p.compliment` `p.avatar` `p.userinfo`", server: "🏠 Servidor: `p.serverinfo` `p.channels` `p.roles` `p.emojis`", mod: "🛡️ Administración: `p.ban` `p.kick` `p.warn` `p.clear` `p.lock` `p.mute` `p.autorroles`" }; await interaction.reply({ embeds: [info(pages[interaction.values[0]] || "Categoría no encontrada.")], ephemeral: true }); });
 client.on("error", error => console.error("❌ Error de Discord:", error));
 process.on("unhandledRejection", error => console.error("❌ Unhandled Rejection:", error));
 process.on("uncaughtException", error => console.error("❌ Uncaught Exception:", error));
-
 http.createServer((req, res) => { res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" }); res.end("Joshua está funcionando 🤖🟢"); }).listen(PORT, "0.0.0.0", () => console.log(`🌐 Servidor iniciado en el puerto ${PORT}`));
 if (!process.env.DISCORD_TOKEN) { console.error("❌ Falta DISCORD_TOKEN en las variables de Render."); process.exit(1); }
 client.login(process.env.DISCORD_TOKEN).then(() => console.log("🔐 Login de Discord correcto.")).catch(error => { console.error("❌ No se pudo iniciar sesión en Discord:", error.message); process.exit(1); });
